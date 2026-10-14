@@ -672,7 +672,6 @@ function TaskForm({
       projectId: draft.projectId,
       modelSelection: draft.modelSelection,
       schedule,
-      catchUp: draft.catchUp,
       enabled: draft.enabled,
       threadId: draft.task?.threadId ?? null,
       workspaceStrategy:
@@ -1024,22 +1023,6 @@ function TaskForm({
             ) : null}
           </>
         )}
-        {draft.schedule.mode !== "webhook" ? (
-          <View className="min-h-14 flex-row items-center gap-3 border-t border-border-subtle px-4 py-3">
-            <View className="min-w-0 flex-1 gap-0.5">
-              <Text className="text-lg text-foreground">Catch up when late</Text>
-              <Text className="text-sm text-foreground-muted">
-                If this task is still running when it's due again, run it once as soon as it
-                finishes. Turn off to wait for the next scheduled time.
-              </Text>
-            </View>
-            <ThemedSwitch
-              accessibilityLabel="Catch up when late"
-              value={draft.catchUp}
-              onValueChange={(catchUp) => setDraft({ ...draft, catchUp })}
-            />
-          </View>
-        ) : null}
         <View className="min-h-14 flex-row items-center gap-3 border-t border-border-subtle px-4 py-3">
           <Text className="min-w-0 flex-1 text-lg text-foreground">Enabled</Text>
           <ThemedSwitch

@@ -78,7 +78,6 @@ describe("scheduled task schedule calculation", () => {
       expect(
         dueRunAction({
           schedule: cron,
-          catchUp: true,
           slotAt: at("09:00"),
           now: at("09:05"),
           previousRun: idle,
@@ -91,7 +90,6 @@ describe("scheduled task schedule calculation", () => {
         expect(
           dueRunAction({
             schedule,
-            catchUp: true,
             slotAt: at("09:00"),
             now: at("15:00"),
             previousRun: { busy: false, finishedAt: at("08:40") },
@@ -102,7 +100,6 @@ describe("scheduled task schedule calculation", () => {
       expect(
         dueRunAction({
           schedule: { type: "interval", everyMs: 60_000 },
-          catchUp: false,
           slotAt: at("09:00"),
           now: at("15:00"),
           previousRun: idle,
@@ -111,16 +108,9 @@ describe("scheduled task schedule calculation", () => {
     });
 
     it("never starts a run while the previous one is busy", () => {
-      const decide = (catchUp: boolean) =>
-        dueRunAction({
-          schedule: cron,
-          catchUp,
-          slotAt: at("10:00"),
-          now: at("10:05"),
-          previousRun: busy,
-        });
-      expect(decide(true)).toBe("wait");
-      expect(decide(false)).toBe("skip");
+      expect(
+        dueRunAction({ schedule: cron, slotAt: at("10:00"), now: at("10:05"), previousRun: busy }),
+      ).toBe("wait");
     });
 
     it("catches up as soon as a long previous run finishes, however late its slot", () => {
@@ -128,7 +118,6 @@ describe("scheduled task schedule calculation", () => {
       expect(
         dueRunAction({
           schedule: cron,
-          catchUp: true,
           slotAt: at("10:00"),
           now: at("10:16"),
           previousRun: { busy: false, finishedAt: at("10:16") },
@@ -138,7 +127,6 @@ describe("scheduled task schedule calculation", () => {
       expect(
         dueRunAction({
           schedule: cron,
-          catchUp: true,
           slotAt: at("10:00"),
           now: at("14:00"),
           previousRun: { busy: false, finishedAt: at("10:16") },

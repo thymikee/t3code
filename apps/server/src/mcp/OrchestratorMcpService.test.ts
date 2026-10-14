@@ -1932,7 +1932,6 @@ describe("OrchestratorMcpService provider resolution", () => {
       prompt: "Do {{body.instruction}}",
       enabled: true,
       schedule: { type: "webhook", signature: null },
-      catchUp: true,
       projectId,
       threadId: null,
       workspaceStrategy: { type: "root" },

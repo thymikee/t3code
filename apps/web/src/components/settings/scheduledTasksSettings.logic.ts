@@ -58,8 +58,6 @@ export interface DraftState {
   readonly timeOfDay: string;
   readonly weekdays: ReadonlySet<number>;
   readonly cronExpression: string;
-  /** Run a slot that came due during a long run once that run finishes, instead of skipping it. */
-  readonly catchUp: boolean;
   readonly projectId: string;
   readonly threadId: string;
   readonly workspaceMode: WorkspaceMode;
@@ -151,7 +149,6 @@ export function taskToDraft(task: ScheduledTask): DraftState {
     timeOfDay: schedule.type === "fixed_time" ? schedule.timeOfDay : "09:00",
     weekdays,
     cronExpression: schedule.type === "cron" ? schedule.expression : "",
-    catchUp: task.catchUp,
     projectId: task.projectId,
     threadId: task.threadId ?? "",
     workspaceMode: task.workspaceStrategy.type,

@@ -136,7 +136,6 @@ const legacyTask: ScheduledTask = {
   prompt: "Review open issues",
   enabled: true,
   schedule: { type: "interval", everyMs: 60_000 },
-  catchUp: false,
   projectId: ProjectId.make("project"),
   threadId: null,
   workspaceStrategy: { type: "worktree", baseRef: "release" },
@@ -171,10 +170,9 @@ describe("editing scheduled task branch settings", () => {
 });
 
 describe("cron scheduled tasks", () => {
-  it("edits the expression and catch-up choice without sending the generated description", () => {
+  it("edits the expression without sending the generated description", () => {
     const draft = taskToDraft({
       ...legacyTask,
-      catchUp: true,
       schedule: {
         type: "cron",
         expression: "17 0,4,8-20 * * *",
@@ -182,7 +180,6 @@ describe("cron scheduled tasks", () => {
       },
     });
     expect(draft.scheduleMode).toBe("cron");
-    expect(draft.catchUp).toBe(true);
     expect(scheduleFromDraft({ ...draft, cronExpression: " 30 9 * * 1-5 " })).toEqual({
       type: "cron",
       expression: "30 9 * * 1-5",

@@ -153,8 +153,6 @@ export type ScheduledTaskDraft = {
   readonly baseRef: string;
   readonly checkoutPath: string;
   readonly enabled: boolean;
-  /** Run a slot that came due during a long run once that run finishes, instead of skipping it. */
-  readonly catchUp: boolean;
   readonly startFromOrigin: boolean;
   readonly runtimeMode: RuntimeMode;
 };
@@ -179,7 +177,6 @@ function draftSignature(draft: ScheduledTaskDraft): string {
     draft.baseRef,
     draft.checkoutPath,
     draft.enabled,
-    draft.catchUp,
     draft.startFromOrigin,
     draft.runtimeMode,
   ]);
@@ -208,7 +205,6 @@ export function createDraft(
     baseRef: "main",
     checkoutPath: "",
     enabled: true,
-    catchUp: true,
     startFromOrigin: true,
     runtimeMode: "full-access",
   };
@@ -230,7 +226,6 @@ export function editDraft(task: ScheduledTask): ScheduledTaskDraft {
         ? task.workspaceStrategy.worktreePath
         : "",
     enabled: task.enabled,
-    catchUp: task.catchUp,
     startFromOrigin:
       task.workspaceStrategy.type === "worktree"
         ? (task.workspaceStrategy.startFromOrigin ?? false)

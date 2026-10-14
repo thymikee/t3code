@@ -129,7 +129,6 @@ const EMPTY_DRAFT: DraftState = {
   timeOfDay: "09:00",
   weekdays: new Set([1, 2, 3, 4, 5]),
   cronExpression: "",
-  catchUp: true,
   projectId: "",
   threadId: "",
   workspaceMode: "worktree",
@@ -1009,7 +1008,6 @@ function ScheduledTaskEditorDialog({
       prompt: draft.prompt.trim(),
       enabled: draft.enabled,
       schedule,
-      catchUp: draft.catchUp,
       projectId: selectedProjectId as ProjectId,
       threadId: draft.threadId ? (draft.threadId as ThreadId) : null,
       workspaceStrategy,
@@ -1438,27 +1436,6 @@ function ScheduledTaskEditorDialog({
                 </div>
               )}
             </div>
-
-            {draft.scheduleMode !== "webhook" ? (
-              <div className="flex items-center justify-between gap-4">
-                <div className="min-w-0 space-y-1">
-                  <Label htmlFor="scheduled-task-catch-up">Catch up when late</Label>
-                  <p
-                    id="scheduled-task-catch-up-description"
-                    className="text-sm text-muted-foreground"
-                  >
-                    If this task is still running when it's due again, run it once as soon as it
-                    finishes. Turn off to wait for the next scheduled time.
-                  </p>
-                </div>
-                <Switch
-                  id="scheduled-task-catch-up"
-                  aria-describedby="scheduled-task-catch-up-description"
-                  checked={draft.catchUp}
-                  onCheckedChange={(catchUp) => setDraft((current) => ({ ...current, catchUp }))}
-                />
-              </div>
-            ) : null}
 
             <div className="flex items-center justify-between gap-4">
               <div className="min-w-0 space-y-1">

@@ -122,24 +122,23 @@ export interface PreviousRun {
 
 /**
  * What the poller does with a run whose slot has come:
- * - `wait`: the previous run is busy and the task catches up, so the run
- *   stays due and starts once that work finishes.
- * - `skip`: move to the next occurrence. Either the previous run is busy and
- *   the task does not catch up, or a wall-clock run is too stale to fire (the
- *   server was off or asleep). A run that waited for its predecessor counts
- *   lateness from when that work finished, not from its slot. Interval
- *   schedules are never stale; one late run is how they catch up.
+ * - `wait`: the previous run is busy, so the run stays due and starts once
+ *   that work finishes. However many slots pass meanwhile, it runs once.
+ * - `skip`: a wall-clock run is too stale to fire (the server was off or
+ *   asleep), so it moves to its next occurrence. A run that waited for its
+ *   predecessor counts lateness from when that work finished, not from its
+ *   slot. Interval schedules are never stale; one late run is how they
+ *   catch up.
  * - `run`: start it now.
  */
 export function dueRunAction(input: {
   readonly schedule: ScheduledTaskSchedule;
-  readonly catchUp: boolean;
   readonly slotAt: DateTime.DateTime;
   readonly now: DateTime.DateTime;
   readonly previousRun: PreviousRun;
 }): "run" | "wait" | "skip" {
   const { finishedAt, busy } = input.previousRun;
-  if (busy) return input.catchUp ? "wait" : "skip";
+  if (busy) return "wait";
   const dueAt =
     finishedAt !== null && DateTime.toEpochMillis(finishedAt) > DateTime.toEpochMillis(input.slotAt)
       ? finishedAt

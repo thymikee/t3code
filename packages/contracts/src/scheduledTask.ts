@@ -1,5 +1,4 @@
 import * as Cron from "effect/Cron";
-import * as Effect from "effect/Effect";
 import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
 
@@ -221,12 +220,6 @@ export const ScheduledTask = Schema.Struct({
   prompt: TrimmedNonEmptyString,
   enabled: Schema.Boolean,
   schedule: ScheduledTaskSchedule,
-  /**
-   * When a run comes due while the agent is still working on the previous
-   * one: true runs it once as soon as that work finishes, false skips to the
-   * next scheduled time. Rows from older servers decode as false.
-   */
-  catchUp: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
   projectId: ProjectId,
   threadId: Schema.NullOr(ThreadId),
   workspaceStrategy: OrchestrationV2ThreadLaunchWorkspaceStrategy,
@@ -266,10 +259,6 @@ export const ScheduledTaskUpsertInput = Schema.Struct({
   prompt: TrimmedNonEmptyString,
   enabled: Schema.Boolean,
   schedule: ScheduledTaskUpsertSchedule,
-  catchUp: Schema.optional(Schema.Boolean).annotate({
-    description:
-      "When a run comes due while the agent is still working on the previous one, run it once as soon as that work finishes (true) or skip to the next scheduled time (false). Defaults to true for new tasks and keeps the stored value on edits. Webhook tasks ignore it.",
-  }),
   projectId: ProjectId,
   threadId: Schema.optional(Schema.NullOr(ThreadId)),
   workspaceStrategy: OrchestrationV2ThreadLaunchWorkspaceStrategy,

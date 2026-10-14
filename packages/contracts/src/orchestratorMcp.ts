@@ -529,18 +529,12 @@ export const OrchestratorMcpCapabilitiesResult = Schema.Struct({
 });
 export type OrchestratorMcpCapabilitiesResult = typeof OrchestratorMcpCapabilitiesResult.Type;
 
-const OrchestratorMcpCatchUp = Schema.Boolean.annotate({
-  description:
-    "When a run comes due while the agent is still working on the previous one: true (default for new tasks) runs it once as soon as that work finishes, false skips to the next scheduled time.",
-});
-
 export const OrchestratorMcpScheduleTaskInput = Schema.Struct({
   projectId: OrchestratorMcpProjectTarget,
   prompt: OrchestratorMcpPrompt.annotate({
     description: "Prompt executed on every scheduled run.",
   }),
   schedule: OrchestratorMcpSchedule,
-  catchUp: Schema.optional(OrchestratorMcpCatchUp),
   title: Schema.optional(OrchestratorMcpTitle),
   enabled: Schema.optional(
     Schema.Boolean.annotate({ description: "Whether the schedule starts enabled; defaults true." }),
@@ -569,7 +563,6 @@ export const OrchestratorMcpScheduledTask = Schema.Struct({
   projectId: ProjectId,
   boundThreadId: Schema.NullOr(ThreadId),
   schedule: ScheduledTaskSchedule,
-  catchUp: Schema.Boolean,
   nextRunAt: Schema.NullOr(IsoDateTime),
   lastRunStatus: ScheduledTaskRunStatus,
   /** For webhook tasks: the public T3 Connect URL. Absent when this environment has no managed tunnel. */
@@ -608,7 +601,6 @@ export const OrchestratorMcpUpdateScheduledTaskInput = Schema.Struct({
   prompt: Schema.optional(OrchestratorMcpPrompt),
   title: Schema.optional(OrchestratorMcpTitle),
   schedule: Schema.optional(OrchestratorMcpSchedule),
-  catchUp: Schema.optional(OrchestratorMcpCatchUp),
   enabled: Schema.optional(Schema.Boolean),
   bindToCurrentThread: Schema.optional(Schema.Boolean),
 });

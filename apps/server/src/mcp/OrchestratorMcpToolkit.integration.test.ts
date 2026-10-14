@@ -469,7 +469,6 @@ function scheduledTaskFromUpsert(input: ScheduledTaskUpsertInput): ScheduledTask
                   },
           }
         : input.schedule,
-    catchUp: input.catchUp ?? true,
     projectId: input.projectId,
     threadId: input.threadId ?? null,
     workspaceStrategy: input.workspaceStrategy,

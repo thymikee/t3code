@@ -152,7 +152,6 @@ it.effect("runs a slot that came due during a long run as soon as that run finis
   withService(({ service, launches, finishRun, awaitTask }) =>
     Effect.gen(function* () {
       const { task } = yield* service.upsert(yield* taskInput());
-      assert.isTrue(task.catchUp);
       assert.equal(task.nextRunAt, isoOf(localTime(10, 0)));
 
       yield* pollAt(localTime(10, 0));
@@ -172,27 +171,6 @@ it.effect("runs a slot that came due during a long run as soon as that run finis
       assert.equal(caughtUp.nextRunAt, isoOf(localTime(11, 0)));
       assert.equal(yield* lastThreadId, "thread-2");
       assert.equal(yield* Queue.size(launches), 0);
-    }),
-  ),
-);
-
-it.effect("skips a slot that comes due during a long run when catch-up is off", () =>
-  withService(({ service, launches, finishRun, awaitTask }) =>
-    Effect.gen(function* () {
-      yield* service.upsert(yield* taskInput({ catchUp: false }));
-
-      yield* pollAt(localTime(10, 0));
-      assert.equal((yield* Queue.take(launches)).runId, "run-1");
-      yield* awaitTask((current) => current.runCount === 1);
-
-      yield* pollAt(localTime(10, 30));
-      const skipped = yield* awaitTask((current) => current.nextRunAt === isoOf(localTime(11, 0)));
-      assert.equal(skipped.runCount, 1);
-      assert.equal(yield* Queue.size(launches), 0);
-
-      yield* finishRun("run-1", localTime(10, 46));
-      yield* pollAt(localTime(11, 0));
-      assert.deepEqual(yield* Queue.take(launches), { runId: "run-2", busyRunsAtLaunch: 0 });
     }),
   ),
 );
@@ -220,51 +198,6 @@ it.effect("keeps waiting while a restart continuation carries on the previous ru
       yield* finishRun("run-1-continued", localTime(10, 41));
       yield* TestClock.adjust("6 seconds");
       assert.equal((yield* Queue.take(launches)).runId, "run-2");
-    }),
-  ),
-);
-
-it.effect("catches up by default and keeps a stored choice when an edit omits it", () =>
-  withService(({ service }) =>
-    Effect.gen(function* () {
-      const created = yield* service.upsert(yield* taskInput());
-      assert.isTrue(created.task.catchUp);
-      const optedOut = yield* service.upsert(yield* taskInput({ catchUp: false }));
-      assert.isFalse(optedOut.task.catchUp);
-      const renamed = yield* service.upsert(yield* taskInput({ title: "Renamed" }));
-      assert.isFalse(renamed.task.catchUp);
-    }),
-  ),
-);
-
-it.effect("keeps tasks saved before catch-up existed on their old skipping behavior", () =>
-  withService(({ service }) =>
-    Effect.gen(function* () {
-      const sql = yield* SqlClient.SqlClient;
-      yield* sql`INSERT INTO scheduled_tasks ${sql.insert({
-        task_id: "scheduled-task:legacy",
-        title: "Legacy",
-        prompt: "Run",
-        enabled: 1,
-        schedule_json: '{"type":"interval","everyMs":60000}',
-        project_id: "project-catch-up",
-        thread_id: null,
-        workspace_strategy_json: '{"type":"root"}',
-        model_selection_json: '{"instanceId":"codex","model":"gpt-5"}',
-        runtime_mode: "full-access",
-        interaction_mode: "default",
-        created_by: "user",
-        creation_source: "web",
-        created_at: "2026-07-01T00:00:00.000Z",
-        updated_at: "2026-07-01T00:00:00.000Z",
-        next_run_at: null,
-        last_run_at: null,
-        last_run_status: "never",
-        last_run_error: null,
-        run_count: 0,
-      })}`;
-      const { tasks } = yield* service.list();
-      assert.isFalse(tasks[0]?.catchUp);
     }),
   ),
 );

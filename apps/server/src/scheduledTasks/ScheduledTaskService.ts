@@ -219,7 +219,6 @@ interface ScheduledTaskRow {
   readonly run_count: number;
   readonly webhook_token: string | null;
   readonly webhook_secret: string | null;
-  readonly catch_up: number;
 }
 
 interface WebhookDeliveryRow {
@@ -345,7 +344,6 @@ const decodeRow = (row: ScheduledTaskRow, origin: WebhookOrigin | null = null) =
       prompt: row.prompt,
       enabled: row.enabled === 1,
       schedule,
-      catchUp: row.catch_up === 1,
       projectId: row.project_id,
       threadId: row.thread_id,
       workspaceStrategy,
@@ -462,8 +460,7 @@ export const layer = Layer.effect(
         last_run_error,
         run_count,
         webhook_token,
-        webhook_secret,
-        catch_up
+        webhook_secret
       FROM scheduled_tasks
       ORDER BY updated_at DESC, task_id ASC
     `;
@@ -498,8 +495,7 @@ export const layer = Layer.effect(
         last_run_error,
         run_count,
         webhook_token,
-        webhook_secret,
-        catch_up
+        webhook_secret
       FROM scheduled_tasks
       WHERE task_id = ${id}
     `;
@@ -579,8 +575,7 @@ export const layer = Layer.effect(
           last_run_error,
           run_count,
           webhook_token,
-          webhook_secret,
-          catch_up
+          webhook_secret
         )
         SELECT
           ${task.id},
@@ -604,8 +599,7 @@ export const layer = Layer.effect(
           ${task.lastRunError},
           ${task.runCount},
           ${webhook.token},
-          ${webhook.secret},
-          ${task.catchUp ? 1 : 0}
+          ${webhook.secret}
         WHERE ${requireExisting ? 0 : 1} = 1
            OR EXISTS (SELECT 1 FROM scheduled_tasks WHERE task_id = ${task.id})
         ON CONFLICT (task_id)
@@ -623,7 +617,6 @@ export const layer = Layer.effect(
           creation_source = excluded.creation_source,
           updated_at = excluded.updated_at,
           next_run_at = excluded.next_run_at,
-          catch_up = excluded.catch_up,
           -- Only rotate changes a live token, so a save racing a rotation
           -- cannot bring the old URL back.
           webhook_token = CASE
@@ -996,9 +989,7 @@ export const layer = Layer.effect(
       now: DateTime.DateTime,
     ) {
       const previousRun = yield* readPreviousRun(task.id);
-      switch (
-        dueRunAction({ schedule: task.schedule, catchUp: task.catchUp, slotAt, now, previousRun })
-      ) {
+      switch (dueRunAction({ schedule: task.schedule, slotAt, now, previousRun })) {
         case "wait":
           return;
         case "skip":
@@ -1203,7 +1194,6 @@ export const layer = Layer.effect(
           prompt: input.prompt,
           enabled: input.enabled,
           schedule,
-          catchUp: input.catchUp ?? existingTask?.catchUp ?? true,
           projectId: input.projectId,
           threadId: input.threadId ?? null,
           workspaceStrategy: input.workspaceStrategy,

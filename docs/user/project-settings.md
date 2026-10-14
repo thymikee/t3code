@@ -73,7 +73,7 @@ Webhook tasks only run when their URL is called, so they can't be run
 immediately.
 Leaving an edited form asks before discarding unsaved changes.
 
-## Custom schedules and late runs
+## Custom schedules and busy tasks
 
 In **Settings → Scheduled tasks**, choose **Custom** to run a task on a cron
 expression when the other schedules can't express what you need. For example,
@@ -84,11 +84,9 @@ your threads describes the schedule in plain words for the task list. Agents can
 create the same schedules when you ask in chat.
 
 A timed task never starts while the agent is still working in its thread: the
-task's own thread, or the one its last run created. With **Catch up when late**
-on, a run that comes due in the meantime starts once, as soon as that work
-finishes, and the list shows how long it has been waiting.
-Turn it off to skip to the next scheduled time instead. New tasks catch up by
-default.
+task's own thread, or the one its last run created. A run that comes due in the
+meantime starts once, as soon as that work finishes, and the list shows how
+long it has been waiting.
 
 ## Webhook automations
 

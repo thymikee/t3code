@@ -90,13 +90,6 @@ describe("hasScheduledTaskDraftChanges", () => {
     );
   });
 
-  it("treats the catch-up switch as a change", () => {
-    const initial = editDraft(legacyTask);
-    expect(initial.catchUp).toBe(false);
-    expect(hasScheduledTaskDraftChanges(initial, { ...initial, catchUp: true })).toBe(true);
-    expect(createDraft(null, null).catchUp).toBe(true);
-  });
-
   it("keeps invalid, unsaved schedule input dirty", () => {
     const initial = createDraft(null, null);
     expect(
@@ -242,7 +235,6 @@ const legacyTask: ScheduledTask = {
   prompt: "Review open issues",
   enabled: true,
   schedule: { type: "interval", everyMs: 60_000 },
-  catchUp: false,
   projectId: ProjectId.make("project"),
   threadId: null,
   workspaceStrategy: { type: "worktree", baseRef: "release" },
