@@ -130,16 +130,13 @@ export function normalizeCliError(
 
 const MAX_SCHEDULE_DESCRIPTION_CHARS = 120;
 
-/** One trimmed line, or null when the model returned nothing usable. */
-export function sanitizeScheduleDescription(raw: string): string | null {
-  const line = raw
-    .trim()
-    .split(/\r?\n/g)[0]
-    ?.trim()
+/** One trimmed line; empty when the model returned nothing usable. */
+export function sanitizeScheduleDescription(raw: string): string {
+  const line = (raw.trim().split(/\r?\n/)[0] ?? "")
     .replace(/^['"`]+|['"`]+$/g, "")
     .replace(/[.\s]+$/, "")
-    .replace(/\s+/g, " ");
-  if (!line) return null;
+    .replace(/\s+/g, " ")
+    .trim();
   return line.length <= MAX_SCHEDULE_DESCRIPTION_CHARS
     ? line
     : `${line.slice(0, MAX_SCHEDULE_DESCRIPTION_CHARS - 3).trimEnd()}...`;

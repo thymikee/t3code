@@ -83,9 +83,10 @@ weekday, in the environment's time zone. After you save, the model that names
 your threads describes the schedule in plain words for the task list. Agents can
 create the same schedules when you ask in chat.
 
-A task never starts again while the agent is still working on its previous run.
-With **Catch up when late** on, a run that comes due in the meantime starts once,
-as soon as that work finishes, and the list shows how long it has been waiting.
+A timed task never starts while the agent is still working in its thread: the
+task's own thread, or the one its last run created. With **Catch up when late**
+on, a run that comes due in the meantime starts once, as soon as that work
+finishes, and the list shows how long it has been waiting.
 Turn it off to skip to the next scheduled time instead. New tasks catch up by
 default.
 

@@ -113,9 +113,9 @@ function isMissedWallClockRun(
   return DateTime.toEpochMillis(now) - DateTime.toEpochMillis(dueAt) > MISSED_WALL_CLOCK_GRACE_MS;
 }
 
-/** The agent run a task's previous scheduled run started, as the poller sees it. */
+/** The agent's work from a task's previous scheduled run, as the poller sees it. */
 export interface PreviousRun {
-  /** The agent is still working on it, or it is queued behind other work. */
+  /** The agent is still working, or has work queued, in the task's thread. */
   readonly busy: boolean;
   readonly finishedAt: DateTime.DateTime | null;
 }
@@ -124,12 +124,11 @@ export interface PreviousRun {
  * What the poller does with a run whose slot has come:
  * - `wait`: the previous run is busy and the task catches up, so the run
  *   stays due and starts once that work finishes.
- * - `skip`: the previous run is busy and the task does not catch up, so the
- *   slot is dropped for the next one.
- * - `missed`: a wall-clock run is too stale to fire (the server was off or
- *   asleep), so it moves to its next occurrence. A run that waited for its
- *   predecessor counts lateness from when that run finished, not its slot.
- *   Interval schedules are never missed; one late run is how they catch up.
+ * - `skip`: move to the next occurrence. Either the previous run is busy and
+ *   the task does not catch up, or a wall-clock run is too stale to fire (the
+ *   server was off or asleep). A run that waited for its predecessor counts
+ *   lateness from when that work finished, not from its slot. Interval
+ *   schedules are never stale; one late run is how they catch up.
  * - `run`: start it now.
  */
 export function dueRunAction(input: {
@@ -138,12 +137,12 @@ export function dueRunAction(input: {
   readonly slotAt: DateTime.DateTime;
   readonly now: DateTime.DateTime;
   readonly previousRun: PreviousRun;
-}): "run" | "wait" | "skip" | "missed" {
+}): "run" | "wait" | "skip" {
   const { finishedAt, busy } = input.previousRun;
   if (busy) return input.catchUp ? "wait" : "skip";
   const dueAt =
     finishedAt !== null && DateTime.toEpochMillis(finishedAt) > DateTime.toEpochMillis(input.slotAt)
       ? finishedAt
       : input.slotAt;
-  return isMissedWallClockRun(input.schedule, dueAt, input.now) ? "missed" : "run";
+  return isMissedWallClockRun(input.schedule, dueAt, input.now) ? "skip" : "run";
 }

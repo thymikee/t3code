@@ -323,9 +323,9 @@ describe("sanitizeScheduleDescription", () => {
     );
   });
 
-  it("returns null when the model wrote nothing", () => {
-    expect(sanitizeScheduleDescription("  \n ")).toBeNull();
-    expect(sanitizeScheduleDescription('""')).toBeNull();
+  it("returns nothing when the model wrote nothing", () => {
+    expect(sanitizeScheduleDescription("  \n ")).toBe("");
+    expect(sanitizeScheduleDescription('""')).toBe("");
   });
 });
 

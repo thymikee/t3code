@@ -32,7 +32,8 @@ export const layer = Layer.effect(
           expression,
           modelSelection: settings.textGenerationModelSelection,
         });
-        return result.description;
+        // An empty label leaves the task labelled by its expression.
+        return result.description || null;
       }).pipe(
         Effect.timeout(DESCRIBE_TIMEOUT),
         Effect.catchCause((cause) =>

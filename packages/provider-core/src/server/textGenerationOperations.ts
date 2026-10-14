@@ -187,14 +187,7 @@ export function fromRunner(name: string, run: Runner): ProviderTextGeneration {
         modelSelection: input.modelSelection,
         ...buildScheduleDescriptionPrompt({ expression: input.expression }),
       });
-      const description = sanitizeScheduleDescription(generated.description);
-      if (description === null) {
-        return yield* new TextGenerationError({
-          operation: "generateScheduleDescription",
-          detail: `${name} returned an empty schedule description.`,
-        });
-      }
-      return { description };
+      return { description: sanitizeScheduleDescription(generated.description) };
     });
 
   const generateReviewGuide: ProviderTextGeneration["generateReviewGuide"] = Effect.fn(
