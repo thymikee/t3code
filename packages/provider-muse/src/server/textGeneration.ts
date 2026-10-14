@@ -22,11 +22,13 @@ import {
   buildBranchNamePrompt,
   buildCommitMessagePrompt,
   buildPrContentPrompt,
+  buildScheduleDescriptionPrompt,
   buildThreadTitlePrompt,
 } from "@t3tools/provider-core/server/textGenerationPrompts";
 import {
   sanitizeCommitSubject,
   sanitizePrTitle,
+  sanitizeScheduleDescription,
   sanitizeThreadTitle,
   toJsonSchemaObject,
 } from "@t3tools/provider-core/server/textGenerationUtils";
@@ -342,6 +344,22 @@ export const makeMuseTextGeneration = Effect.fn("makeMuseTextGeneration")(functi
     });
     return { title: sanitizeThreadTitle(generated.title) };
   });
+  const generateScheduleDescription: ProviderTextGeneration["generateScheduleDescription"] =
+    Effect.fn("MuseTextGeneration.generateScheduleDescription")(function* (input) {
+      const generated = yield* runMuseJson({
+        operation: "generateScheduleDescription",
+        ...buildScheduleDescriptionPrompt(input),
+        modelSelection: input.modelSelection,
+      });
+      const description = sanitizeScheduleDescription(generated.description);
+      if (description === null) {
+        return yield* new TextGenerationError({
+          operation: "generateScheduleDescription",
+          detail: "Muse Code returned an empty schedule description.",
+        });
+      }
+      return { description };
+    });
   // Muse runs in an empty read-only directory and cannot be pointed at a checkout to read.
   const generateReviewGuide: ProviderTextGeneration["generateReviewGuide"] = () =>
     Effect.fail(investigationUnsupported("generateReviewGuide", "Muse Code"));
@@ -350,6 +368,7 @@ export const makeMuseTextGeneration = Effect.fn("makeMuseTextGeneration")(functi
     generatePrContent,
     generateBranchName,
     generateThreadTitle,
+    generateScheduleDescription,
     generateReviewGuide,
   } satisfies ProviderTextGeneration;
 });

@@ -1,3 +1,6 @@
+import * as Cron from "effect/Cron";
+import * as Effect from "effect/Effect";
+import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
 
 import {
@@ -54,6 +57,45 @@ const ScheduledTaskFixedTimeSchedule = Schema.Struct({
   ),
 }).annotate({
   description: "Run at a fixed local wall-clock time on selected weekdays.",
+});
+
+/**
+ * Five-field cron expression: minute, hour, day of month, month, weekday.
+ * Seconds are not accepted, so a cron task runs at most once per minute.
+ */
+export const ScheduledTaskCronExpression = TrimmedNonEmptyString.check(
+  Schema.makeFilter(
+    (value) =>
+      (value.split(/\s+/).length === 5 && Result.isSuccess(Cron.parse(value))) ||
+      "Expected a five-field cron expression: minute hour day-of-month month weekday.",
+  ),
+).annotate({
+  description:
+    "Five-field cron expression (minute hour day-of-month month weekday) in the environment's local time, such as '17 0,4,8-20 * * *'.",
+});
+
+const ScheduledTaskCronSchedule = Schema.Struct({
+  type: Schema.Literal("cron").annotate({
+    description: "Select a cron expression.",
+  }),
+  expression: ScheduledTaskCronExpression,
+  /**
+   * Plain-language reading of the expression, written by the server's text
+   * generation model after a save. Null until it arrives or when it fails.
+   */
+  description: Schema.optional(Schema.NullOr(Schema.String)),
+}).annotate({
+  description: "Run whenever a cron expression matches the environment's local time.",
+});
+
+const ScheduledTaskUpsertCronSchedule = Schema.Struct({
+  type: Schema.Literal("cron").annotate({
+    description: "Select a cron expression.",
+  }),
+  expression: ScheduledTaskCronExpression,
+}).annotate({
+  description:
+    "Run whenever a cron expression matches the environment's local time. The server writes a plain-language description after saving.",
 });
 
 const ScheduledTaskWebhookSignatureFields = {
@@ -129,10 +171,11 @@ const ScheduledTaskUpsertWebhookSchedule = Schema.Struct({
 export const ScheduledTaskSchedule = Schema.Union([
   ScheduledTaskIntervalSchedule,
   ScheduledTaskFixedTimeSchedule,
+  ScheduledTaskCronSchedule,
   ScheduledTaskWebhookSchedule,
 ]).annotate({
   description:
-    "Structured trigger. Pass an object with type 'interval', 'fixed_time' or 'webhook'.",
+    "Structured trigger. Pass an object with type 'interval', 'fixed_time', 'cron' or 'webhook'.",
 });
 export type ScheduledTaskSchedule = typeof ScheduledTaskSchedule.Type;
 
@@ -151,9 +194,11 @@ export const ScheduledTaskUpsertSchedule = Schema.Union([
     description: "Run repeatedly after a fixed number of milliseconds.",
   }),
   ScheduledTaskFixedTimeSchedule,
+  ScheduledTaskUpsertCronSchedule,
   ScheduledTaskUpsertWebhookSchedule,
 ]).annotate({
-  description: "Writable trigger. Pass an object with type 'interval', 'fixed_time' or 'webhook'.",
+  description:
+    "Writable trigger. Pass an object with type 'interval', 'fixed_time', 'cron' or 'webhook'.",
 });
 export type ScheduledTaskUpsertSchedule = typeof ScheduledTaskUpsertSchedule.Type;
 
@@ -176,6 +221,12 @@ export const ScheduledTask = Schema.Struct({
   prompt: TrimmedNonEmptyString,
   enabled: Schema.Boolean,
   schedule: ScheduledTaskSchedule,
+  /**
+   * When a run comes due while the agent is still working on the previous
+   * one: true runs it once as soon as that work finishes, false skips to the
+   * next scheduled time. Rows from older servers decode as false.
+   */
+  catchUp: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
   projectId: ProjectId,
   threadId: Schema.NullOr(ThreadId),
   workspaceStrategy: OrchestrationV2ThreadLaunchWorkspaceStrategy,
@@ -215,6 +266,10 @@ export const ScheduledTaskUpsertInput = Schema.Struct({
   prompt: TrimmedNonEmptyString,
   enabled: Schema.Boolean,
   schedule: ScheduledTaskUpsertSchedule,
+  catchUp: Schema.optional(Schema.Boolean).annotate({
+    description:
+      "When a run comes due while the agent is still working on the previous one, run it once as soon as that work finishes (true) or skip to the next scheduled time (false). Defaults to true for new tasks and keeps the stored value on edits. Webhook tasks ignore it.",
+  }),
   projectId: ProjectId,
   threadId: Schema.optional(Schema.NullOr(ThreadId)),
   workspaceStrategy: OrchestrationV2ThreadLaunchWorkspaceStrategy,

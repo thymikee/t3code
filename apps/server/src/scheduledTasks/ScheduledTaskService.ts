@@ -2,6 +2,9 @@ import {
   CommandId,
   MessageId,
   PROVIDER_SEND_TURN_MAX_INPUT_CHARS,
+  type OrchestrationV2RunStatus,
+  type ProjectId,
+  type RunId,
   ScheduledTask,
   ScheduledTaskError,
   ScheduledTaskId,
@@ -45,7 +48,13 @@ import * as Metrics from "../observability/Metrics.ts";
 import * as ThreadManagementService from "../orchestration-v2/ThreadManagementService.ts";
 import * as SecretRequests from "../secrets/SecretRequests.ts";
 import * as Scheduler from "../scheduling/Scheduler.ts";
-import { isMissedFixedTimeRun, isSameSchedule, nextScheduledRunAt } from "./Schedule.ts";
+import {
+  dueRunAction,
+  isSameSchedule,
+  nextScheduledRunAt,
+  normalizeCronExpression,
+  type PreviousRun,
+} from "./Schedule.ts";
 import {
   redactHeaders,
   redactQuery,
@@ -53,6 +62,15 @@ import {
   type WebhookRequest,
 } from "./webhookTemplate.ts";
 import { constantTimeEquals, verifyWebhookSignature } from "./webhookVerification.ts";
+
+/** Agent run statuses that mean the work a scheduled run started is not done. */
+const ACTIVE_RUN_STATUSES: ReadonlySet<string> = new Set<OrchestrationV2RunStatus>([
+  "preparing",
+  "queued",
+  "starting",
+  "running",
+  "waiting",
+]);
 
 /** Path prefix of the environment route that receives webhook requests. */
 export const WEBHOOK_ROUTE_PREFIX = "/api/hooks";
@@ -99,6 +117,21 @@ export class ScheduledTaskWebhookOrigin extends Context.Reference<Effect.Effect<
   {
     defaultValue: () => Effect.succeed({ relayHookBaseUrl: null }),
   },
+) {}
+
+/** A plain-language reading of a cron expression, or null when none is available. */
+export type DescribeCron = (input: {
+  readonly expression: string;
+  readonly projectId: ProjectId;
+}) => Effect.Effect<string | null>;
+
+/**
+ * Production uses the text generation model configured for thread titles; the
+ * default leaves cron tasks labelled by their expression.
+ */
+export class ScheduledTaskCronDescriber extends Context.Reference<DescribeCron>(
+  "t3/scheduledTasks/ScheduledTaskCronDescriber",
+  { defaultValue: () => () => Effect.succeed(null) },
 ) {}
 
 /** A queued webhook delivery that no longer applies to its task; `reason` is shown in the delivery log. */
@@ -197,6 +230,7 @@ interface ScheduledTaskRow {
   readonly run_count: number;
   readonly webhook_token: string | null;
   readonly webhook_secret: string | null;
+  readonly catch_up: number;
 }
 
 interface WebhookDeliveryRow {
@@ -322,6 +356,7 @@ const decodeRow = (row: ScheduledTaskRow, origin: WebhookOrigin | null = null) =
       prompt: row.prompt,
       enabled: row.enabled === 1,
       schedule,
+      catchUp: row.catch_up === 1,
       projectId: row.project_id,
       threadId: row.thread_id,
       workspaceStrategy,
@@ -397,6 +432,8 @@ export const layer = Layer.effect(
     const secretRequests = yield* SecretRequests.SecretRequests;
     const scheduler = yield* Scheduler.Scheduler;
     const readWebhookOrigin = yield* ScheduledTaskWebhookOrigin;
+    const describeCron = yield* ScheduledTaskCronDescriber;
+    const layerScope = yield* Effect.scope;
     // Webhook deliveries for one task dispatch in arrival order rather than
     // being dropped while an earlier delivery is still dispatching.
     const webhookPermits = yield* Ref.make<ReadonlyMap<ScheduledTaskId, Semaphore.Semaphore>>(
@@ -436,7 +473,8 @@ export const layer = Layer.effect(
         last_run_error,
         run_count,
         webhook_token,
-        webhook_secret
+        webhook_secret,
+        catch_up
       FROM scheduled_tasks
       ORDER BY updated_at DESC, task_id ASC
     `;
@@ -471,7 +509,8 @@ export const layer = Layer.effect(
         last_run_error,
         run_count,
         webhook_token,
-        webhook_secret
+        webhook_secret,
+        catch_up
       FROM scheduled_tasks
       WHERE task_id = ${id}
     `;
@@ -551,7 +590,8 @@ export const layer = Layer.effect(
           last_run_error,
           run_count,
           webhook_token,
-          webhook_secret
+          webhook_secret,
+          catch_up
         )
         SELECT
           ${task.id},
@@ -575,7 +615,8 @@ export const layer = Layer.effect(
           ${task.lastRunError},
           ${task.runCount},
           ${webhook.token},
-          ${webhook.secret}
+          ${webhook.secret},
+          ${task.catchUp ? 1 : 0}
         WHERE ${requireExisting ? 0 : 1} = 1
            OR EXISTS (SELECT 1 FROM scheduled_tasks WHERE task_id = ${task.id})
         ON CONFLICT (task_id)
@@ -593,6 +634,7 @@ export const layer = Layer.effect(
           creation_source = excluded.creation_source,
           updated_at = excluded.updated_at,
           next_run_at = excluded.next_run_at,
+          catch_up = excluded.catch_up,
           -- Only rotate changes a live token, so a save racing a rotation
           -- cannot bring the old URL back.
           webhook_token = CASE
@@ -657,6 +699,8 @@ export const layer = Layer.effect(
       readonly status: "succeeded" | "failed";
       readonly error: string | null;
       readonly startedAtIso: string;
+      /** The agent run this dispatch started; null keeps the previous one. */
+      readonly dispatchedRunId: RunId | null;
     }) =>
       sql`
         UPDATE scheduled_tasks
@@ -664,13 +708,42 @@ export const layer = Layer.effect(
             next_run_at = ${input.nextRunAtIso},
             last_run_status = ${input.status},
             last_run_error = ${input.error},
-            run_count = run_count + 1
+            run_count = run_count + 1,
+            last_dispatched_run_id = COALESCE(${input.dispatchedRunId}, last_dispatched_run_id)
         WHERE task_id = ${input.id}
           AND last_run_status = 'running'
           AND last_run_at = ${input.startedAtIso}
       `.pipe(
         Effect.mapError((cause) =>
           taskError("Could not record schedule task run.", { taskId: input.id, cause }),
+        ),
+      );
+
+    // The agent run the task last started: busy until it reaches a terminal
+    // status. A run in a deleted thread, or one the projection no longer has,
+    // cannot hold the schedule back.
+    const readPreviousRun = (id: ScheduledTaskId) =>
+      sql<{ readonly status: string; readonly completed_at: string | null }>`
+        SELECT run.status, run.completed_at
+        FROM scheduled_tasks AS task
+        JOIN orchestration_v2_projection_runs AS run
+          ON run.run_id = task.last_dispatched_run_id
+        JOIN orchestration_v2_projection_threads AS thread
+          ON thread.thread_id = run.thread_id
+        WHERE task.task_id = ${id} AND thread.deleted_at IS NULL
+      `.pipe(
+        Effect.map((rows): PreviousRun => {
+          const row = rows[0];
+          if (row === undefined) return { busy: false, finishedAt: null };
+          const finishedAt =
+            row.completed_at === null ? Option.none() : DateTime.make(row.completed_at);
+          return {
+            busy: ACTIVE_RUN_STATUSES.has(row.status),
+            finishedAt: Option.getOrNull(finishedAt),
+          };
+        }),
+        Effect.mapError((cause) =>
+          taskError("Could not read the schedule task's previous run.", { taskId: id, cause }),
         ),
       );
 
@@ -705,6 +778,29 @@ export const layer = Layer.effect(
             cause,
           }),
         ),
+      );
+
+    // Generating a description takes seconds, so the save returns first and
+    // the list updates when it lands. It is written only while the task still
+    // has the expression it describes; a failure leaves the expression label.
+    const writeCronDescription = (id: ScheduledTaskId, projectId: ProjectId, expression: string) =>
+      describeCron({ expression, projectId }).pipe(
+        Effect.flatMap((description) =>
+          description === null
+            ? Effect.void
+            : sql`
+                UPDATE scheduled_tasks
+                SET schedule_json = ${JSON.stringify({ type: "cron", expression, description })}
+                WHERE task_id = ${id}
+                  AND json_extract(schedule_json, '$.type') = 'cron'
+                  AND json_extract(schedule_json, '$.expression') = ${expression}
+              `.pipe(Effect.andThen(notifyChanged)),
+        ),
+        Effect.catchCause((cause) =>
+          Effect.logWarning("Could not describe cron schedule", { taskId: id, cause }),
+        ),
+        Effect.forkIn(layerScope),
+        Effect.asVoid,
       );
 
     const runTask = Effect.fn("ScheduledTaskService.runTask")(function* (
@@ -832,6 +928,15 @@ export const layer = Layer.effect(
 
         const completedAt = yield* localNow;
         const runSucceeded = result._tag === "Success";
+        // The agent keeps working after the dispatch returns; remembering its
+        // run lets the poller hold the next slot until that work finishes.
+        const dispatchedRunId =
+          result._tag !== "Success"
+            ? null
+            : "run" in result.value
+              ? result.value.run.id
+              : (result.value.projection.runs.find((run) => run.userMessageId === messageId)?.id ??
+                null);
         const lastRunStatus = runSucceeded ? ("succeeded" as const) : ("failed" as const);
         const lastRunError = runSucceeded ? null : errorMessage(result.cause);
         // Re-read the task so the next run is computed from the schedule as it
@@ -858,6 +963,7 @@ export const layer = Layer.effect(
             status: lastRunStatus,
             error: lastRunError,
             startedAtIso,
+            dispatchedRunId,
           });
           yield* notifyChanged;
         }
@@ -874,7 +980,7 @@ export const layer = Layer.effect(
       );
     });
 
-    // A due fixed-time run that is long past its slot (server was off or
+    // A due wall-clock run that is long past its slot (server was off or
     // asleep) is skipped and re-aimed at its next occurrence, not fired late.
     const rescheduleMissedRun = Effect.fn("ScheduledTaskService.rescheduleMissedRun")(function* (
       task: ScheduledTask,
@@ -899,6 +1005,51 @@ export const layer = Layer.effect(
       yield* notifyChanged;
     });
 
+    // A due run whose previous run the agent is still working on waits for
+    // it (catch up) or skips to its next time, so runs never stack.
+    const skipBusyRun = Effect.fn("ScheduledTaskService.skipBusyRun")(function* (
+      task: ScheduledTask,
+      now: DateTime.DateTime,
+    ) {
+      const next = nextRunAt(task, now);
+      yield* Effect.logInfo("Skipping schedule task run while its previous run is busy", {
+        taskId: task.id,
+        skippedRunAt: task.nextRunAt,
+        rescheduledTo: next,
+      });
+      yield* sql`
+        UPDATE scheduled_tasks
+        SET next_run_at = ${next},
+            updated_at = ${iso(now)}
+        WHERE task_id = ${task.id}
+      `.pipe(
+        Effect.mapError((cause) =>
+          taskError("Could not reschedule busy schedule task run.", { taskId: task.id, cause }),
+        ),
+      );
+      yield* notifyChanged;
+    });
+
+    const runDueTask = Effect.fn("ScheduledTaskService.runDueTask")(function* (
+      task: ScheduledTask,
+      slotAt: DateTime.DateTime,
+      now: DateTime.DateTime,
+    ) {
+      const previousRun = yield* readPreviousRun(task.id);
+      switch (
+        dueRunAction({ schedule: task.schedule, catchUp: task.catchUp, slotAt, now, previousRun })
+      ) {
+        case "wait":
+          return;
+        case "skip":
+          return yield* skipBusyRun(task, now);
+        case "missed":
+          return yield* rescheduleMissedRun(task, now);
+        case "run":
+          return yield* runTask(task, "scheduled").pipe(Effect.asVoid);
+      }
+    });
+
     const runDueTasks = Effect.fn("ScheduledTaskService.runDueTasks")(function* () {
       const now = yield* localNow;
       const tasks = yield* listDueTasks(now).pipe(
@@ -910,11 +1061,7 @@ export const layer = Layer.effect(
       yield* Effect.forEach(
         due,
         ({ task, dueAt }) =>
-          Effect.suspend(() =>
-            isMissedFixedTimeRun(task.schedule, dueAt, now)
-              ? rescheduleMissedRun(task, now)
-              : runTask(task, "scheduled"),
-          ).pipe(
+          runDueTask(task, dueAt, now).pipe(
             Effect.catch((cause) =>
               Effect.logWarning("Scheduled task run failed", { taskId: task.id, cause }),
             ),
@@ -1037,7 +1184,19 @@ export const layer = Layer.effect(
                       },
                 maxDeliveryAgeMinutes: input.schedule.maxDeliveryAgeMinutes ?? null,
               }
-            : input.schedule;
+            : input.schedule.type === "cron"
+              ? {
+                  type: "cron",
+                  expression: normalizeCronExpression(input.schedule.expression),
+                  // A description belongs to its expression; keep it only
+                  // while the expression is unchanged.
+                  description:
+                    existingTask?.schedule.type === "cron" &&
+                    isSameSchedule(existingTask.schedule, input.schedule)
+                      ? (existingTask.schedule.description ?? null)
+                      : null,
+                }
+              : input.schedule;
         const webhook =
           input.schedule.type === "webhook"
             ? yield* Effect.gen(function* () {
@@ -1086,6 +1245,7 @@ export const layer = Layer.effect(
           prompt: input.prompt,
           enabled: input.enabled,
           schedule,
+          catchUp: input.catchUp ?? existingTask?.catchUp ?? true,
           projectId: input.projectId,
           threadId: input.threadId ?? null,
           workspaceStrategy: input.workspaceStrategy,
@@ -1106,6 +1266,9 @@ export const layer = Layer.effect(
         };
         yield* saveTask(task, input.requireExisting === true, webhook);
         yield* notifyChanged;
+        if (schedule.type === "cron" && schedule.description == null) {
+          yield* writeCronDescription(id, task.projectId, schedule.expression);
+        }
         return { task: (yield* findTask(id)) ?? task };
       });
 

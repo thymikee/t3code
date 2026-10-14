@@ -255,6 +255,7 @@ function scheduledTaskSummary(task: ScheduledTask, mayRun: boolean): Orchestrato
     projectId: task.projectId,
     boundThreadId: task.threadId,
     schedule: task.schedule,
+    catchUp: task.catchUp,
     nextRunAt: task.nextRunAt,
     lastRunStatus: task.lastRunStatus,
     // A bare path is not a URL anyone can call, so agents never get one to share.
@@ -1648,6 +1649,7 @@ const make = Effect.gen(function* () {
           prompt: input.prompt,
           enabled: input.enabled ?? true,
           schedule: input.schedule,
+          ...(input.catchUp === undefined ? {} : { catchUp: input.catchUp }),
           projectId,
           threadId: bindToCurrentThread && parent !== undefined ? parent.thread.id : null,
           workspaceStrategy: scheduledTaskWorkspaceStrategy(bindToCurrentThread),
@@ -1730,6 +1732,7 @@ const make = Effect.gen(function* () {
           prompt: input.prompt ?? existing.prompt,
           enabled: input.enabled ?? existing.enabled,
           schedule: input.schedule ?? existing.schedule,
+          catchUp: input.catchUp ?? existing.catchUp,
           projectId: existing.projectId,
           threadId,
           workspaceStrategy,

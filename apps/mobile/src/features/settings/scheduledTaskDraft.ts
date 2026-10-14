@@ -10,6 +10,7 @@ import type {
 
 import { DEFAULT_SERVER_SETTINGS } from "@t3tools/contracts";
 import { parseMaxDeliveryAge } from "@t3tools/client-runtime/scheduled-task-webhook";
+import { isCronExpression } from "@t3tools/client-runtime/scheduled-task-schedule";
 import {
   resolveProjectSettings,
   type LegacyProjectSettingsFields,
@@ -44,10 +45,11 @@ export function scheduledTaskDefaultModel(
 }
 
 export type ScheduleDraft = {
-  readonly mode: "fixed_time" | "interval" | "webhook";
+  readonly mode: "fixed_time" | "interval" | "cron" | "webhook";
   readonly timeOfDay: string;
   readonly weekdays: ReadonlyArray<number>;
   readonly intervalMinutes: string;
+  readonly cronExpression: string;
   /** A webhook signature check configured elsewhere; mobile keeps it but does not edit it. */
   readonly signature: ScheduledTaskWebhookSignature | null;
   /** Minutes as typed; empty runs every held request regardless of age. */
@@ -59,6 +61,7 @@ export const DEFAULT_SCHEDULE: ScheduleDraft = {
   timeOfDay: "09:00",
   weekdays: [1, 2, 3, 4, 5],
   intervalMinutes: "15",
+  cronExpression: "",
   signature: null,
   maxDeliveryAgeMinutes: "",
 };
@@ -79,6 +82,8 @@ export function scheduleDraftForTask(task: Pick<ScheduledTask, "schedule">): Sch
         mode: "interval",
         intervalMinutes: String(Math.max(1, task.schedule.everyMs / 60_000)),
       };
+    case "cron":
+      return { ...DEFAULT_SCHEDULE, mode: "cron", cronExpression: task.schedule.expression };
     case "webhook":
       return {
         ...DEFAULT_SCHEDULE,
@@ -116,6 +121,10 @@ export function scheduleFromDraft(draft: ScheduleDraft): ScheduledTaskUpsertSche
     const everyMs = Math.round(minutes * 60_000);
     return minutes >= 1 && Number.isSafeInteger(everyMs) ? { type: "interval", everyMs } : null;
   }
+  if (draft.mode === "cron") {
+    const expression = draft.cronExpression.trim();
+    return isCronExpression(expression) ? { type: "cron", expression } : null;
+  }
   const weekdays = [...new Set(draft.weekdays)].sort((a, b) => a - b);
   if (
     !/^([01]?\d|2[0-3]):[0-5]\d$/.test(draft.timeOfDay) ||
@@ -144,6 +153,8 @@ export type ScheduledTaskDraft = {
   readonly baseRef: string;
   readonly checkoutPath: string;
   readonly enabled: boolean;
+  /** Run a slot that came due during a long run once that run finishes, instead of skipping it. */
+  readonly catchUp: boolean;
   readonly startFromOrigin: boolean;
   readonly runtimeMode: RuntimeMode;
 };
@@ -162,11 +173,13 @@ function draftSignature(draft: ScheduledTaskDraft): string {
     draft.schedule.timeOfDay,
     [...draft.schedule.weekdays].sort((a, b) => a - b),
     draft.schedule.intervalMinutes,
+    draft.schedule.cronExpression,
     draft.schedule.maxDeliveryAgeMinutes,
     draft.workspace,
     draft.baseRef,
     draft.checkoutPath,
     draft.enabled,
+    draft.catchUp,
     draft.startFromOrigin,
     draft.runtimeMode,
   ]);
@@ -195,6 +208,7 @@ export function createDraft(
     baseRef: "main",
     checkoutPath: "",
     enabled: true,
+    catchUp: true,
     startFromOrigin: true,
     runtimeMode: "full-access",
   };
@@ -216,6 +230,7 @@ export function editDraft(task: ScheduledTask): ScheduledTaskDraft {
         ? task.workspaceStrategy.worktreePath
         : "",
     enabled: task.enabled,
+    catchUp: task.catchUp,
     startFromOrigin:
       task.workspaceStrategy.type === "worktree"
         ? (task.workspaceStrategy.startFromOrigin ?? false)

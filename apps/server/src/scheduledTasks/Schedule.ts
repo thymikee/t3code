@@ -1,5 +1,7 @@
 import { MIN_SCHEDULED_TASK_INTERVAL_MS, type ScheduledTaskSchedule } from "@t3tools/contracts";
+import * as Cron from "effect/Cron";
 import * as DateTime from "effect/DateTime";
+import * as Result from "effect/Result";
 
 const MINUTE_MS = 60_000;
 
@@ -20,6 +22,14 @@ export function nextScheduledRunAt(
     return DateTime.add(from, {
       milliseconds: Math.max(schedule.everyMs, MIN_SCHEDULED_TASK_INTERVAL_MS),
     });
+  }
+  if (schedule.type === "cron") {
+    // Evaluated in `from`'s zone, the environment's local time like fixed_time.
+    const zone = DateTime.isZoned(from) ? from.zone : undefined;
+    const cron = Cron.parse(schedule.expression, zone);
+    if (Result.isFailure(cron)) return null;
+    const next = DateTime.fromDateUnsafe(Cron.next(cron.success, from));
+    return zone === undefined ? next : DateTime.setZone(next, zone);
   }
 
   const time = parseTimeOfDay(schedule.timeOfDay);
@@ -51,6 +61,10 @@ function weekdayKey(weekdays: ReadonlyArray<number> | undefined): string {
   return unique.join(",");
 }
 
+export function normalizeCronExpression(expression: string): string {
+  return expression.trim().split(/\s+/).join(" ");
+}
+
 /** Semantic equality for schedules: true iff both fire at the same times. */
 export function isSameSchedule(a: ScheduledTaskSchedule, b: ScheduledTaskSchedule): boolean {
   if (a.type === "interval") {
@@ -58,6 +72,14 @@ export function isSameSchedule(a: ScheduledTaskSchedule, b: ScheduledTaskSchedul
   }
   // Webhook tasks never have a next run, whatever their signature settings.
   if (a.type === "webhook") return b.type === "webhook";
+  // The description is derived from the expression, so it never makes two
+  // schedules differ; spacing between fields does not change the meaning.
+  if (a.type === "cron") {
+    return (
+      b.type === "cron" &&
+      normalizeCronExpression(a.expression) === normalizeCronExpression(b.expression)
+    );
+  }
   if (b.type !== "fixed_time") return false;
   // The contract accepts padded and unpadded hours ("9:00" and "09:00"), so
   // compare the parsed time — string equality would treat a format-only edit
@@ -74,43 +96,54 @@ export function isSameSchedule(a: ScheduledTaskSchedule, b: ScheduledTaskSchedul
 }
 
 /**
- * How late a fixed-time run may fire before it counts as missed. Covers poll
- * jitter and short sleeps, while a server booted hours after the slot skips
- * to the next occurrence instead of firing stale work at a random time.
+ * How late a wall-clock run (fixed time or cron) may fire before it counts as
+ * missed. Covers poll jitter and short sleeps, while a server booted hours
+ * after the slot skips to the next occurrence instead of firing stale work at
+ * a random time.
  */
-const MISSED_FIXED_TIME_GRACE_MS = 10 * MINUTE_MS;
+const MISSED_WALL_CLOCK_GRACE_MS = 10 * MINUTE_MS;
 
-/**
- * True when a due fixed-time run was missed by more than the grace window and
- * should be rescheduled to its next occurrence instead of firing now.
- * Interval schedules are never considered missed: an overdue interval task
- * catching up with a single run is the desired behaviour.
- */
-export function isMissedFixedTimeRun(
+/** True when a wall-clock run that became runnable at `dueAt` is too stale to fire. */
+function isMissedWallClockRun(
   schedule: ScheduledTaskSchedule,
   dueAt: DateTime.DateTime,
   now: DateTime.DateTime,
 ): boolean {
-  if (schedule.type !== "fixed_time") return false;
-  return DateTime.toEpochMillis(now) - DateTime.toEpochMillis(dueAt) > MISSED_FIXED_TIME_GRACE_MS;
+  if (schedule.type !== "fixed_time" && schedule.type !== "cron") return false;
+  return DateTime.toEpochMillis(now) - DateTime.toEpochMillis(dueAt) > MISSED_WALL_CLOCK_GRACE_MS;
 }
 
-function describeSchedule(schedule: ScheduledTaskSchedule): string {
-  if (schedule.type === "webhook") return "On webhook";
-  if (schedule.type === "interval") {
-    const minutes = schedule.everyMs / MINUTE_MS;
-    if (Number.isInteger(minutes)) {
-      return `Every ${minutes === 1 ? "minute" : `${minutes} minutes`}`;
-    }
-    return `Every ${Math.round(schedule.everyMs / 1000)} seconds`;
-  }
+/** The agent run a task's previous scheduled run started, as the poller sees it. */
+export interface PreviousRun {
+  /** The agent is still working on it, or it is queued behind other work. */
+  readonly busy: boolean;
+  readonly finishedAt: DateTime.DateTime | null;
+}
 
-  const weekdayCount = schedule.weekdays?.length ?? 0;
-  const days =
-    weekdayCount === 0
-      ? "day"
-      : weekdayCount === 5 && schedule.weekdays?.every((day) => day >= 1 && day <= 5)
-        ? "weekday"
-        : "selected day";
-  return `At ${schedule.timeOfDay} every ${days}`;
+/**
+ * What the poller does with a run whose slot has come:
+ * - `wait`: the previous run is busy and the task catches up, so the run
+ *   stays due and starts once that work finishes.
+ * - `skip`: the previous run is busy and the task does not catch up, so the
+ *   slot is dropped for the next one.
+ * - `missed`: a wall-clock run is too stale to fire (the server was off or
+ *   asleep), so it moves to its next occurrence. A run that waited for its
+ *   predecessor counts lateness from when that run finished, not its slot.
+ *   Interval schedules are never missed; one late run is how they catch up.
+ * - `run`: start it now.
+ */
+export function dueRunAction(input: {
+  readonly schedule: ScheduledTaskSchedule;
+  readonly catchUp: boolean;
+  readonly slotAt: DateTime.DateTime;
+  readonly now: DateTime.DateTime;
+  readonly previousRun: PreviousRun;
+}): "run" | "wait" | "skip" | "missed" {
+  const { finishedAt, busy } = input.previousRun;
+  if (busy) return input.catchUp ? "wait" : "skip";
+  const dueAt =
+    finishedAt !== null && DateTime.toEpochMillis(finishedAt) > DateTime.toEpochMillis(input.slotAt)
+      ? finishedAt
+      : input.slotAt;
+  return isMissedWallClockRun(input.schedule, dueAt, input.now) ? "missed" : "run";
 }

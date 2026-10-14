@@ -19,11 +19,13 @@ import {
   buildCommitMessagePrompt,
   buildPrContentPrompt,
   buildReviewGuidePrompt,
+  buildScheduleDescriptionPrompt,
   buildThreadTitlePrompt,
 } from "./textGenerationPrompts.ts";
 import {
   sanitizeCommitSubject,
   sanitizePrTitle,
+  sanitizeScheduleDescription,
   sanitizeThreadTitle,
 } from "./textGenerationUtils.ts";
 
@@ -177,6 +179,24 @@ export function fromRunner(name: string, run: Runner): ProviderTextGeneration {
     };
   });
 
+  const generateScheduleDescription: ProviderTextGeneration["generateScheduleDescription"] =
+    Effect.fn(`${name}.generateScheduleDescription`)(function* (input) {
+      const generated = yield* run({
+        operation: "generateScheduleDescription",
+        cwd: input.cwd,
+        modelSelection: input.modelSelection,
+        ...buildScheduleDescriptionPrompt({ expression: input.expression }),
+      });
+      const description = sanitizeScheduleDescription(generated.description);
+      if (description === null) {
+        return yield* new TextGenerationError({
+          operation: "generateScheduleDescription",
+          detail: `${name} returned an empty schedule description.`,
+        });
+      }
+      return { description };
+    });
+
   const generateReviewGuide: ProviderTextGeneration["generateReviewGuide"] = Effect.fn(
     `${name}.generateReviewGuide`,
   )(function* (input) {
@@ -194,6 +214,7 @@ export function fromRunner(name: string, run: Runner): ProviderTextGeneration {
     generatePrContent,
     generateBranchName,
     generateThreadTitle,
+    generateScheduleDescription,
     generateReviewGuide,
   } satisfies ProviderTextGeneration;
 }

@@ -9,6 +9,7 @@ import {
 } from "./textGenerationPrompts.ts";
 import {
   normalizeCliError,
+  sanitizeScheduleDescription,
   sanitizeThreadTitle,
   toJsonSchemaObject,
 } from "./textGenerationUtils.ts";
@@ -312,6 +313,19 @@ describe("buildThreadTitlePrompt", () => {
       `Thread contents:\n[Earlier content truncated]\n\n${retainedContext}`,
     );
     expect(result.prompt.match(/\[Earlier content truncated\]/g)).toHaveLength(1);
+  });
+});
+
+describe("sanitizeScheduleDescription", () => {
+  it("keeps one plain line of the model's label", () => {
+    expect(sanitizeScheduleDescription('  "Weekdays at   09:00."\nRuns before standup')).toBe(
+      "Weekdays at 09:00",
+    );
+  });
+
+  it("returns null when the model wrote nothing", () => {
+    expect(sanitizeScheduleDescription("  \n ")).toBeNull();
+    expect(sanitizeScheduleDescription('""')).toBeNull();
   });
 });
 

@@ -54,6 +54,17 @@ describe("scheduleDraftForTask", () => {
     });
   });
 
+  it("round-trips a cron schedule without its generated description", () => {
+    const draft = scheduleDraftForTask({
+      schedule: { type: "cron", expression: "17 0,4,8-20 * * *", description: "Hourly by day" },
+    });
+    expect(draft.mode).toBe("cron");
+    expect(scheduleFromDraft(draft)).toEqual({ type: "cron", expression: "17 0,4,8-20 * * *" });
+    // An expression the server would reject is an invalid schedule.
+    expect(scheduleFromDraft({ ...draft, cronExpression: "every hour" })).toBeNull();
+    expect(scheduleFromDraft({ ...draft, cronExpression: "0 0 9 * * *" })).toBeNull();
+  });
+
   it("keeps a webhook signature on save without sending a secret", () => {
     const signature = {
       header: "x-hub-signature-256",
@@ -77,6 +88,13 @@ describe("hasScheduledTaskDraftChanges", () => {
     expect(hasScheduledTaskDraftChanges(initial, { ...edited, prompt: initial.prompt })).toBe(
       false,
     );
+  });
+
+  it("treats the catch-up switch as a change", () => {
+    const initial = editDraft(legacyTask);
+    expect(initial.catchUp).toBe(false);
+    expect(hasScheduledTaskDraftChanges(initial, { ...initial, catchUp: true })).toBe(true);
+    expect(createDraft(null, null).catchUp).toBe(true);
   });
 
   it("keeps invalid, unsaved schedule input dirty", () => {
@@ -224,6 +242,7 @@ const legacyTask: ScheduledTask = {
   prompt: "Review open issues",
   enabled: true,
   schedule: { type: "interval", everyMs: 60_000 },
+  catchUp: false,
   projectId: ProjectId.make("project"),
   threadId: null,
   workspaceStrategy: { type: "worktree", baseRef: "release" },
