@@ -75,6 +75,18 @@ export interface ThreadTitleGenerationResult {
   needsRefinement?: boolean | undefined;
 }
 
+export interface ScheduleDescriptionGenerationInput {
+  cwd: string;
+  /** A five-field cron expression, already validated. */
+  expression: string;
+  /** What model and provider to use for generation. */
+  modelSelection: ModelSelection;
+}
+
+export interface ScheduleDescriptionGenerationResult {
+  description: string;
+}
+
 export interface ReviewGuideStackLayer {
   readonly number: number;
   readonly title: string | null;
@@ -142,6 +154,11 @@ export interface ProviderTextGeneration {
   readonly generateThreadTitle: (
     input: ThreadTitleGenerationInput,
   ) => Effect.Effect<ThreadTitleGenerationResult, TextGenerationError>;
+
+  /** Read a cron expression aloud as a short schedule label. */
+  readonly generateScheduleDescription: (
+    input: ScheduleDescriptionGenerationInput,
+  ) => Effect.Effect<ScheduleDescriptionGenerationResult, TextGenerationError>;
 
   /** Explain a change request to the maintainer deciding whether it lands. */
   readonly generateReviewGuide: (

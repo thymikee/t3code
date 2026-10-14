@@ -35,6 +35,7 @@ type TextGenerationOp =
   | "generatePrContent"
   | "generateBranchName"
   | "generateThreadTitle"
+  | "generateScheduleDescription"
   | "generateReviewGuide";
 
 const resolveInstance = (
@@ -72,6 +73,12 @@ export const make = Effect.gen(function* () {
       resolveInstance(registry, "generateBranchName", input.modelSelection.instanceId).pipe(
         Effect.flatMap((textGeneration) => textGeneration.generateBranchName(input)),
       ),
+    generateScheduleDescription: (input) =>
+      resolveInstance(
+        registry,
+        "generateScheduleDescription",
+        input.modelSelection.instanceId,
+      ).pipe(Effect.flatMap((textGeneration) => textGeneration.generateScheduleDescription(input))),
     generateReviewGuide: (input) =>
       resolveInstance(registry, "generateReviewGuide", input.modelSelection.instanceId).pipe(
         Effect.flatMap((textGeneration) => textGeneration.generateReviewGuide(input)),

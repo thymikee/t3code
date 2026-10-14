@@ -26,6 +26,12 @@ import {
   parseMaxDeliveryAge,
 } from "@t3tools/client-runtime/scheduled-task-webhook";
 import {
+  CRON_EXPRESSION_HINT,
+  cronScheduleLabel,
+  formatWaitingForPreviousRun,
+  isCronExpression,
+} from "@t3tools/client-runtime/scheduled-task-schedule";
+import {
   useCallback,
   useEffect,
   useLayoutEffect,
@@ -105,6 +111,7 @@ const DAYS = [
 function describeSchedule(task: ScheduledTask): string {
   if (task.schedule.type === "webhook") return "On webhook";
   if (task.schedule.type === "interval") return formatScheduledTaskInterval(task.schedule.everyMs);
+  if (task.schedule.type === "cron") return cronScheduleLabel(task.schedule);
   const days = task.schedule.weekdays?.length ? repeatLabel(task.schedule.weekdays) : "Every day";
   return `${days} at ${formatTime(task.schedule.timeOfDay)}`;
 }
@@ -665,6 +672,7 @@ function TaskForm({
       projectId: draft.projectId,
       modelSelection: draft.modelSelection,
       schedule,
+      catchUp: draft.catchUp,
       enabled: draft.enabled,
       threadId: draft.task?.threadId ?? null,
       workspaceStrategy:
@@ -863,6 +871,7 @@ function TaskForm({
               { value: "fixed_time", label: "At a time" },
               { value: "interval", label: "Interval" },
               { value: "webhook", label: "On webhook" },
+              { value: "cron", label: "Custom" },
             ]}
             selected={draft.schedule.mode}
             onSelect={(mode) => {
@@ -974,6 +983,23 @@ function TaskForm({
               }
             />
           </>
+        ) : draft.schedule.mode === "cron" ? (
+          <>
+            <FormField
+              label="Cron expression"
+              value={draft.schedule.cronExpression}
+              placeholder="17 0,4,8-20 * * *"
+              disabled={saving}
+              borderTop
+              onChange={(cronExpression) =>
+                setDraft({ ...draft, schedule: { ...draft.schedule, cronExpression } })
+              }
+            />
+            <CronScheduleHint
+              expression={draft.schedule.cronExpression}
+              savedSchedule={draft.task?.schedule.type === "cron" ? draft.task.schedule : null}
+            />
+          </>
         ) : (
           <>
             <FormField
@@ -998,6 +1024,22 @@ function TaskForm({
             ) : null}
           </>
         )}
+        {draft.schedule.mode !== "webhook" ? (
+          <View className="min-h-14 flex-row items-center gap-3 border-t border-border-subtle px-4 py-3">
+            <View className="min-w-0 flex-1 gap-0.5">
+              <Text className="text-lg text-foreground">Catch up when late</Text>
+              <Text className="text-sm text-foreground-muted">
+                If this task is still running when it's due again, run it once as soon as it
+                finishes. Turn off to wait for the next scheduled time.
+              </Text>
+            </View>
+            <ThemedSwitch
+              accessibilityLabel="Catch up when late"
+              value={draft.catchUp}
+              onValueChange={(catchUp) => setDraft({ ...draft, catchUp })}
+            />
+          </View>
+        ) : null}
         <View className="min-h-14 flex-row items-center gap-3 border-t border-border-subtle px-4 py-3">
           <Text className="min-w-0 flex-1 text-lg text-foreground">Enabled</Text>
           <ThemedSwitch
@@ -1007,7 +1049,7 @@ function TaskForm({
           />
         </View>
       </SettingsSection>
-      {draft.schedule.mode === "fixed_time" ? (
+      {draft.schedule.mode === "fixed_time" || draft.schedule.mode === "cron" ? (
         <Text className="px-2 text-sm text-foreground-muted">
           Time uses the environment's time zone, which may differ from your phone's.
         </Text>
@@ -1028,6 +1070,35 @@ function TaskForm({
         </Text>
       </Pressable>
     </View>
+  );
+}
+
+/** The saved description while the expression still matches it, or how to write one. */
+function CronScheduleHint({
+  expression,
+  savedSchedule,
+}: {
+  readonly expression: string;
+  readonly savedSchedule: Extract<ScheduledTask["schedule"], { readonly type: "cron" }> | null;
+}) {
+  const normalized = expression.trim().split(/\s+/).join(" ");
+  if (normalized !== "" && !isCronExpression(normalized)) {
+    return (
+      <Text className="px-4 pb-3 text-sm text-danger-foreground">
+        Not a valid cron expression. {CRON_EXPRESSION_HINT}
+      </Text>
+    );
+  }
+  const description =
+    savedSchedule !== null && savedSchedule.expression === normalized
+      ? (savedSchedule.description ?? null)
+      : null;
+  return (
+    <Text className="px-4 pb-3 text-sm text-foreground-muted">
+      {normalized === ""
+        ? CRON_EXPRESSION_HINT
+        : (description ?? "A plain-language description appears after you save.")}
+    </Text>
   );
 }
 
@@ -1222,7 +1293,10 @@ function EnvironmentTasks({
                 {!task.enabled
                   ? " · Paused"
                   : task.nextRunAt
-                    ? ` · ${formatNextScheduledTaskRun(task.nextRunAt, now)}`
+                    ? ` · ${
+                        formatWaitingForPreviousRun(task, now) ??
+                        formatNextScheduledTaskRun(task.nextRunAt, now)
+                      }`
                     : ""}
               </Text>
               {task.lastRunError ? (

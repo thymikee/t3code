@@ -49,6 +49,7 @@ import * as ThreadLaunchService from "./ThreadLaunchService.ts";
 import * as ThreadLifecycleService from "./ThreadLifecycleService.ts";
 import * as ThreadForkService from "./ThreadForkService.ts";
 import * as TurnItemPositionStore from "./TurnItemPositionStore.ts";
+import * as ScheduledTaskCronDescriber from "../scheduledTasks/ScheduledTaskCronDescriber.ts";
 import * as ScheduledTaskService from "../scheduledTasks/ScheduledTaskService.ts";
 import * as SecretRequests from "../secrets/SecretRequests.ts";
 
@@ -279,6 +280,9 @@ const layerScheduledTaskProvided = ScheduledTaskService.layer.pipe(
       layerThreadLaunchProvided,
       layerThreadManagementProvided,
       layerSecretRequestsProvided,
+      ScheduledTaskCronDescriber.layer.pipe(
+        Layer.provide(Layer.merge(ProjectStore.layer, TextGeneration.layer)),
+      ),
     ),
   ),
 );

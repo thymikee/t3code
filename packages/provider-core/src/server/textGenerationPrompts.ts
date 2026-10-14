@@ -493,3 +493,28 @@ export function buildThreadTitlePrompt(input: ThreadTitlePromptInput) {
 
   return { prompt, outputSchema };
 }
+
+const SCHEDULE_DESCRIPTION_PROMPT = `Describe when a cron schedule runs, as a short label in a list of scheduled tasks.
+Return JSON with key description.
+
+The expression has five fields: minute, hour, day of month, month, weekday (0 and 7 are Sunday).
+Times are the user's local time.
+
+Rules:
+- Be exact. Every time the expression matches must be covered, and nothing else. Do not round or simplify the schedule.
+- Fewer than 70 characters, one line, no trailing punctuation.
+- Use 24-hour HH:MM times and plain words: "Every 15 minutes", "Hourly", "Weekdays", "Daily".
+- Do not mention cron, the expression, or time zones.
+
+Examples:
+- 0 9 * * 1-5 -> Weekdays at 09:00
+- */15 * * * * -> Every 15 minutes
+- 17 0,4,8-20 * * * -> Hourly at :17 from 08:17 to 20:17, plus 00:17 and 04:17
+- 30 18 1 * * -> Monthly on the 1st at 18:30`;
+
+export function buildScheduleDescriptionPrompt(input: { readonly expression: string }) {
+  return {
+    prompt: `${SCHEDULE_DESCRIPTION_PROMPT}\n\nCron expression:\n${input.expression}`,
+    outputSchema: Schema.Struct({ description: Schema.String }),
+  };
+}

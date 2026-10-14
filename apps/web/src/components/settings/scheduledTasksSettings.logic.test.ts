@@ -136,6 +136,7 @@ const legacyTask: ScheduledTask = {
   prompt: "Review open issues",
   enabled: true,
   schedule: { type: "interval", everyMs: 60_000 },
+  catchUp: false,
   projectId: ProjectId.make("project"),
   threadId: null,
   workspaceStrategy: { type: "worktree", baseRef: "release" },
@@ -166,6 +167,26 @@ describe("editing scheduled task branch settings", () => {
       workspaceStrategy: { type: "worktree", baseRef: "release", startFromOrigin },
     });
     expect(draft.startFromOrigin).toBe(startFromOrigin);
+  });
+});
+
+describe("cron scheduled tasks", () => {
+  it("edits the expression and catch-up choice without sending the generated description", () => {
+    const draft = taskToDraft({
+      ...legacyTask,
+      catchUp: true,
+      schedule: {
+        type: "cron",
+        expression: "17 0,4,8-20 * * *",
+        description: "Hourly at :17 from 08:17 to 20:17, plus 00:17 and 04:17",
+      },
+    });
+    expect(draft.scheduleMode).toBe("cron");
+    expect(draft.catchUp).toBe(true);
+    expect(scheduleFromDraft({ ...draft, cronExpression: " 30 9 * * 1-5 " })).toEqual({
+      type: "cron",
+      expression: "30 9 * * 1-5",
+    });
   });
 });
 

@@ -25,6 +25,12 @@ import type {
 } from "@t3tools/contracts";
 import { DEFAULT_WEBHOOK_PROMPT } from "@t3tools/client-runtime/scheduled-task-webhook";
 import {
+  CRON_EXPRESSION_HINT,
+  cronScheduleLabel,
+  formatWaitingForPreviousRun,
+  isCronExpression,
+} from "@t3tools/client-runtime/scheduled-task-schedule";
+import {
   MAX_WEBHOOK_DELIVERY_AGE_MINUTES,
   MIN_SCHEDULED_TASK_INTERVAL_MS,
   ProviderInstanceId,
@@ -122,6 +128,8 @@ const EMPTY_DRAFT: DraftState = {
   intervalMinutes: "15",
   timeOfDay: "09:00",
   weekdays: new Set([1, 2, 3, 4, 5]),
+  cronExpression: "",
+  catchUp: true,
   projectId: "",
   threadId: "",
   workspaceMode: "worktree",
@@ -174,6 +182,7 @@ function splitModelKey(value: string): ModelSelection | null {
 
 export function scheduleLabel(schedule: ScheduledTaskSchedule): string {
   if (schedule.type === "webhook") return "On webhook";
+  if (schedule.type === "cron") return cronScheduleLabel(schedule);
   if (schedule.type === "interval") {
     const minutes = schedule.everyMs / 60_000;
     return Number.isInteger(minutes)
@@ -349,7 +358,7 @@ function ScheduledTaskEnvironmentSection({
       onEdit(environment.environmentId, linkedTask);
     }
   }, [environment.environmentId, linkedTask, onEdit]);
-  useRelativeTimeTick(60_000);
+  const nowMs = useRelativeTimeTick(60_000);
   return (
     <SettingsSection
       title={environment.label}
@@ -390,6 +399,7 @@ function ScheduledTaskEnvironmentSection({
                 key={task.id}
                 environmentId={environment.environmentId}
                 task={task}
+                nowMs={nowMs}
                 onEdit={() => onEdit(environment.environmentId, task)}
               />
             ))
@@ -403,10 +413,13 @@ function ScheduledTaskEnvironmentSection({
 function ScheduledTaskRow({
   environmentId,
   task,
+  nowMs,
   onEdit,
 }: {
   readonly environmentId: EnvironmentId;
   readonly task: ScheduledTask;
+  /** The list's minute tick, so waiting times stay current. */
+  readonly nowMs: number;
   readonly onEdit: () => void;
 }) {
   const canOperate = useAtomValue(
@@ -456,9 +469,8 @@ function ScheduledTaskRow({
               ? "Paused"
               : isWebhook
                 ? "Listening"
-                : task.nextRunAt
-                  ? `Next run ${relativeLabel(task.nextRunAt)}`
-                  : "Not scheduled"}
+                : (formatWaitingForPreviousRun(task, nowMs) ??
+                  (task.nextRunAt ? `Next run ${relativeLabel(task.nextRunAt)}` : "Not scheduled"))}
           </span>
           {task.lastRunStatus !== "never" ? (
             <Badge variant={statusVariant(task.lastRunStatus)}>{task.lastRunStatus}</Badge>
@@ -768,6 +780,65 @@ function WebhookDeliveryMode({ environmentId }: { readonly environmentId: Enviro
   );
 }
 
+/**
+ * Cron input for the Custom schedule. The saved task's description is shown
+ * while the expression still matches it; a new one is written after saving.
+ */
+function CronScheduleField({
+  value,
+  savedSchedule,
+  onChange,
+}: {
+  readonly value: string;
+  readonly savedSchedule: Extract<ScheduledTaskSchedule, { readonly type: "cron" }> | null;
+  readonly onChange: (value: string) => void;
+}) {
+  const expression = value.trim().split(/\s+/).join(" ");
+  const valid = isCronExpression(expression);
+  const description =
+    savedSchedule !== null && savedSchedule.expression === expression
+      ? (savedSchedule.description ?? null)
+      : null;
+  return (
+    <div className="space-y-2">
+      <div className="flex items-center gap-2">
+        <Label htmlFor="scheduled-task-cron">Cron</Label>
+        <div className="min-w-0 flex-1">
+          <Input
+            id="scheduled-task-cron"
+            nativeInput
+            font="mono"
+            autoComplete="off"
+            spellCheck={false}
+            placeholder="17 0,4,8-20 * * *"
+            aria-invalid={expression !== "" && !valid}
+            aria-describedby="scheduled-task-cron-hint"
+            value={value}
+            onChange={(event) => onChange(event.target.value)}
+          />
+        </div>
+      </div>
+      <p id="scheduled-task-cron-hint" className="text-xs text-muted-foreground">
+        {expression === "" ? (
+          CRON_EXPRESSION_HINT
+        ) : !valid ? (
+          <span className="text-destructive">
+            Not a valid cron expression. {CRON_EXPRESSION_HINT}
+          </span>
+        ) : description !== null ? (
+          <>
+            <span className="font-medium text-foreground">{description}</span>
+            <br />
+            Uses this environment's time zone.
+          </>
+        ) : (
+          "A plain-language description appears after you save. Uses this environment's time zone."
+        )}
+      </p>
+    </div>
+  );
+}
+
 function ScheduledTaskEditorDialog({
   initialEnvironmentId,
   task,
@@ -906,6 +977,10 @@ function ScheduledTaskEditorDialog({
       reportFailure("Invalid interval", "Enter an interval of at least one minute.");
       return;
     }
+    if (schedule.type === "cron" && !isCronExpression(schedule.expression)) {
+      reportFailure("Invalid cron expression", CRON_EXPRESSION_HINT);
+      return;
+    }
     if (draft.workspaceMode === "existing_worktree" && !draft.existingWorktreePath.trim()) {
       reportFailure("Checkout path is required", "Enter the path of the checkout to run in.");
       return;
@@ -934,6 +1009,7 @@ function ScheduledTaskEditorDialog({
       prompt: draft.prompt.trim(),
       enabled: draft.enabled,
       schedule,
+      catchUp: draft.catchUp,
       projectId: selectedProjectId as ProjectId,
       threadId: draft.threadId ? (draft.threadId as ThreadId) : null,
       workspaceStrategy,
@@ -968,8 +1044,8 @@ function ScheduledTaskEditorDialog({
         <DialogHeader>
           <DialogTitle>{draft.editingId ? "Edit task" : "New task"}</DialogTitle>
           <DialogDescription>
-            Run a prompt automatically — on an interval, at a fixed time, or when a webhook is
-            called.
+            Run a prompt automatically — at a fixed time, on an interval or cron schedule, or when a
+            webhook is called.
           </DialogDescription>
         </DialogHeader>
 
@@ -1163,7 +1239,12 @@ function ScheduledTaskEditorDialog({
                   value={[draft.scheduleMode]}
                   onValueChange={(values) => {
                     const mode = values[0] as ScheduleMode | undefined;
-                    if (mode === "fixed" || mode === "interval" || mode === "webhook")
+                    if (
+                      mode === "fixed" ||
+                      mode === "interval" ||
+                      mode === "cron" ||
+                      mode === "webhook"
+                    )
                       setDraft((current) => ({
                         ...current,
                         scheduleMode: mode,
@@ -1177,6 +1258,7 @@ function ScheduledTaskEditorDialog({
                   <Toggle value="fixed">At a time</Toggle>
                   <Toggle value="interval">Every interval</Toggle>
                   <Toggle value="webhook">On webhook</Toggle>
+                  <Toggle value="cron">Custom</Toggle>
                 </ToggleGroup>
               </div>
 
@@ -1329,6 +1411,14 @@ function ScheduledTaskEditorDialog({
                     ))}
                   </ToggleGroup>
                 </div>
+              ) : draft.scheduleMode === "cron" ? (
+                <CronScheduleField
+                  value={draft.cronExpression}
+                  savedSchedule={liveTask?.schedule.type === "cron" ? liveTask.schedule : null}
+                  onChange={(cronExpression) =>
+                    setDraft((current) => ({ ...current, cronExpression }))
+                  }
+                />
               ) : (
                 <div className="flex items-center gap-2">
                   <Label htmlFor="scheduled-task-interval">Run every</Label>
@@ -1348,6 +1438,27 @@ function ScheduledTaskEditorDialog({
                 </div>
               )}
             </div>
+
+            {draft.scheduleMode !== "webhook" ? (
+              <div className="flex items-center justify-between gap-4">
+                <div className="min-w-0 space-y-1">
+                  <Label htmlFor="scheduled-task-catch-up">Catch up when late</Label>
+                  <p
+                    id="scheduled-task-catch-up-description"
+                    className="text-sm text-muted-foreground"
+                  >
+                    If this task is still running when it's due again, run it once as soon as it
+                    finishes. Turn off to wait for the next scheduled time.
+                  </p>
+                </div>
+                <Switch
+                  id="scheduled-task-catch-up"
+                  aria-describedby="scheduled-task-catch-up-description"
+                  checked={draft.catchUp}
+                  onCheckedChange={(catchUp) => setDraft((current) => ({ ...current, catchUp }))}
+                />
+              </div>
+            ) : null}
 
             <div className="flex items-center justify-between gap-4">
               <div className="min-w-0 space-y-1">

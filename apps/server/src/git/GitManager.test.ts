@@ -348,6 +348,7 @@ function createTextGeneration(
       Effect.succeed({
         title: "Update workflow",
       }),
+    generateScheduleDescription: () => Effect.die("unused"),
     generateReviewGuide: () => Effect.succeed({ stops: [] }),
     ...overrides,
   };
@@ -397,6 +398,7 @@ function createTextGeneration(
             }),
         ),
       ),
+    generateScheduleDescription: (input) => implementation.generateScheduleDescription(input),
     generateReviewGuide: (input) => implementation.generateReviewGuide(input),
   };
 }
