@@ -83,7 +83,7 @@ const withService = <A, E>(
         launch: (input) =>
           Queue.offer(launches, input).pipe(
             Effect.andThen(options.gate ? Deferred.await(options.gate) : Effect.void),
-            Effect.as({ threadId: "thread-1", resumed: false, projection: { runs: [] } } as never),
+            Effect.as({ threadId: "thread-1", resumed: false } as never),
           ),
       }),
       Layer.mock(ThreadManagementService.ThreadManagementService)({}),

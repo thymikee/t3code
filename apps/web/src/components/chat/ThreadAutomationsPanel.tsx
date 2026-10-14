@@ -16,7 +16,9 @@ import {
 
 import { ThreadDetailsSection } from "./ThreadDetailsSection";
 import { cn } from "../../lib/utils";
+import { formatWaitingForPreviousRun } from "@t3tools/client-runtime/scheduled-task-schedule";
 import { relativeLabel, scheduleLabel } from "../settings/ScheduledTasksSettings";
+import { useRelativeTimeTick } from "../settings/settingsLayout";
 import { useEnvironmentQuery } from "../../state/query";
 import { serverEnvironment } from "../../state/server";
 import { useAtomCommand } from "../../state/use-atom-command";
@@ -53,6 +55,7 @@ export function ThreadAutomationsPanel(props: {
   const tasksQuery = useEnvironmentQuery(
     serverEnvironment.scheduledTasksLive({ environmentId: props.environmentId, input: {} }),
   );
+  const nowMs = useRelativeTimeTick(60_000);
   const setTaskEnabled = useAtomCommand(serverEnvironment.setScheduledTaskEnabled, {
     label: "thread automation toggle",
   });
@@ -177,7 +180,7 @@ export function ThreadAutomationsPanel(props: {
               <p className="truncate text-2xs text-muted-foreground">
                 {scheduleLabel(task.schedule)}
                 {task.enabled && task.nextRunAt !== null
-                  ? ` · next ${relativeLabel(task.nextRunAt)}`
+                  ? ` · ${formatWaitingForPreviousRun(task, nowMs) ?? `next ${relativeLabel(task.nextRunAt)}`}`
                   : task.enabled
                     ? ""
                     : " · paused"}

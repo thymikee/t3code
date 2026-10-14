@@ -61,7 +61,12 @@ const withService = <A, E>(
   body: (input: {
     readonly service: ScheduledTaskService.ScheduledTaskService["Service"];
     readonly launches: Queue.Queue<Launch>;
-    readonly finishRun: (runId: string, at: DateTime.DateTime) => Effect.Effect<void>;
+    /** Settles an agent run, `completed` unless the test says otherwise. */
+    readonly finishRun: (
+      runId: string,
+      at: DateTime.DateTime,
+      status?: string,
+    ) => Effect.Effect<void>;
     /** The first task list emission that satisfies `predicate`. */
     readonly awaitTask: (
       predicate: (task: ScheduledTask) => boolean,
@@ -80,7 +85,7 @@ const withService = <A, E>(
       NodeCrypto.layer,
       Scheduler.layer,
       Layer.mock(ThreadLaunchService.ThreadLaunchService)({
-        launch: (input) =>
+        launch: () =>
           Effect.gen(function* () {
             const n = yield* Ref.updateAndGet(launched, (count) => count + 1);
             const runId = `run-${n}`;
@@ -101,23 +106,17 @@ const withService = <A, E>(
               VALUES (${runId}, ${`thread-${n}`}, 1, 'codex', 'running', '2026-07-01', '{}')
             `;
             yield* Queue.offer(launches, { runId, busyRunsAtLaunch: busy[0]?.count ?? -1 });
-            return {
-              threadId: `thread-${n}`,
-              resumed: false,
-              projection: {
-                runs: [{ id: runId, userMessageId: input.initialMessage?.messageId }],
-              },
-            } as never;
+            return { threadId: `thread-${n}`, resumed: false } as never;
           }).pipe(Effect.orDie),
       }),
       Layer.mock(ThreadManagementService.ThreadManagementService)({}),
       Layer.mock(SecretRequests.SecretRequests)({}),
       Layer.succeed(ScheduledTaskService.ScheduledTaskCronDescriber, describeCron),
     );
-    const finishRun = (runId: string, at: DateTime.DateTime) =>
+    const finishRun = (runId: string, at: DateTime.DateTime, status = "completed") =>
       sql`
         UPDATE orchestration_v2_projection_runs
-        SET status = 'completed', completed_at = ${isoOf(at)}
+        SET status = ${status}, completed_at = ${isoOf(at)}
         WHERE run_id = ${runId}
       `.pipe(Effect.asVoid, Effect.orDie);
     return yield* Effect.gen(function* () {
@@ -141,12 +140,12 @@ const pollAt = (at: DateTime.DateTime) =>
     Effect.andThen(TestClock.adjust("6 seconds")),
   );
 
-const lastDispatchedRunId = Effect.gen(function* () {
+const lastThreadId = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
-  const rows = yield* sql<{ readonly last_dispatched_run_id: string | null }>`
-    SELECT last_dispatched_run_id FROM scheduled_tasks
+  const rows = yield* sql<{ readonly last_thread_id: string | null }>`
+    SELECT last_thread_id FROM scheduled_tasks
   `;
-  return rows[0]?.last_dispatched_run_id;
+  return rows[0]?.last_thread_id;
 });
 
 it.effect("runs a slot that came due during a long run as soon as that run finishes", () =>
@@ -159,7 +158,7 @@ it.effect("runs a slot that came due during a long run as soon as that run finis
       yield* pollAt(localTime(10, 0));
       assert.deepEqual(yield* Queue.take(launches), { runId: "run-1", busyRunsAtLaunch: 0 });
       yield* awaitTask((current) => current.runCount === 1);
-      assert.equal(yield* lastDispatchedRunId, "run-1");
+      assert.equal(yield* lastThreadId, "thread-1");
 
       // The agent is still on run-1 when the 10:30 slot comes, and the
       // scheduler keeps polling while it works.
@@ -171,7 +170,7 @@ it.effect("runs a slot that came due during a long run as soon as that run finis
       assert.deepEqual(yield* Queue.take(launches), { runId: "run-2", busyRunsAtLaunch: 0 });
       const caughtUp = yield* awaitTask((current) => current.runCount === 2);
       assert.equal(caughtUp.nextRunAt, isoOf(localTime(11, 0)));
-      assert.equal(yield* lastDispatchedRunId, "run-2");
+      assert.equal(yield* lastThreadId, "thread-2");
       assert.equal(yield* Queue.size(launches), 0);
     }),
   ),
@@ -194,6 +193,33 @@ it.effect("skips a slot that comes due during a long run when catch-up is off", 
       yield* finishRun("run-1", localTime(10, 46));
       yield* pollAt(localTime(11, 0));
       assert.deepEqual(yield* Queue.take(launches), { runId: "run-2", busyRunsAtLaunch: 0 });
+    }),
+  ),
+);
+
+it.effect("keeps waiting while a restart continuation carries on the previous run", () =>
+  withService(({ service, launches, finishRun, awaitTask }) =>
+    Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+      yield* service.upsert(yield* taskInput());
+      yield* pollAt(localTime(10, 0));
+      assert.equal((yield* Queue.take(launches)).runId, "run-1");
+      yield* awaitTask((current) => current.runCount === 1);
+
+      // A restart interrupts run-1 and the agent continues in a new run of
+      // the same thread; the task's work is not done yet.
+      yield* finishRun("run-1", localTime(10, 20), "interrupted");
+      yield* sql`
+        INSERT INTO orchestration_v2_projection_runs
+          (run_id, thread_id, ordinal, provider, status, requested_at, payload_json)
+        VALUES ('run-1-continued', 'thread-1', 2, 'codex', 'running', '2026-07-01', '{}')
+      `;
+      yield* pollAt(localTime(10, 40));
+      assert.equal(yield* Queue.size(launches), 0);
+
+      yield* finishRun("run-1-continued", localTime(10, 41));
+      yield* TestClock.adjust("6 seconds");
+      assert.equal((yield* Queue.take(launches)).runId, "run-2");
     }),
   ),
 );

@@ -351,14 +351,7 @@ export const makeMuseTextGeneration = Effect.fn("makeMuseTextGeneration")(functi
         ...buildScheduleDescriptionPrompt(input),
         modelSelection: input.modelSelection,
       });
-      const description = sanitizeScheduleDescription(generated.description);
-      if (description === null) {
-        return yield* new TextGenerationError({
-          operation: "generateScheduleDescription",
-          detail: "Muse Code returned an empty schedule description.",
-        });
-      }
-      return { description };
+      return { description: sanitizeScheduleDescription(generated.description) };
     });
   // Muse runs in an empty read-only directory and cannot be pointed at a checkout to read.
   const generateReviewGuide: ProviderTextGeneration["generateReviewGuide"] = () =>

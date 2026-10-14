@@ -2,9 +2,7 @@ import {
   CommandId,
   MessageId,
   PROVIDER_SEND_TURN_MAX_INPUT_CHARS,
-  type OrchestrationV2RunStatus,
   type ProjectId,
-  type RunId,
   ScheduledTask,
   ScheduledTaskError,
   ScheduledTaskId,
@@ -62,15 +60,6 @@ import {
   type WebhookRequest,
 } from "./webhookTemplate.ts";
 import { constantTimeEquals, verifyWebhookSignature } from "./webhookVerification.ts";
-
-/** Agent run statuses that mean the work a scheduled run started is not done. */
-const ACTIVE_RUN_STATUSES: ReadonlySet<string> = new Set<OrchestrationV2RunStatus>([
-  "preparing",
-  "queued",
-  "starting",
-  "running",
-  "waiting",
-]);
 
 /** Path prefix of the environment route that receives webhook requests. */
 export const WEBHOOK_ROUTE_PREFIX = "/api/hooks";
@@ -699,8 +688,8 @@ export const layer = Layer.effect(
       readonly status: "succeeded" | "failed";
       readonly error: string | null;
       readonly startedAtIso: string;
-      /** The agent run this dispatch started; null keeps the previous one. */
-      readonly dispatchedRunId: RunId | null;
+      /** The thread the dispatch put the agent to work in; null keeps the previous one. */
+      readonly threadId: ThreadId | null;
     }) =>
       sql`
         UPDATE scheduled_tasks
@@ -709,7 +698,7 @@ export const layer = Layer.effect(
             last_run_status = ${input.status},
             last_run_error = ${input.error},
             run_count = run_count + 1,
-            last_dispatched_run_id = COALESCE(${input.dispatchedRunId}, last_dispatched_run_id)
+            last_thread_id = COALESCE(${input.threadId}, last_thread_id)
         WHERE task_id = ${input.id}
           AND last_run_status = 'running'
           AND last_run_at = ${input.startedAtIso}
@@ -719,29 +708,27 @@ export const layer = Layer.effect(
         ),
       );
 
-    // The agent run the task last started: busy until it reaches a terminal
-    // status. A run in a deleted thread, or one the projection no longer has,
-    // cannot hold the schedule back.
+    // The task's previous run is the agent's work in the thread it runs in:
+    // its bound thread, or the thread its last run launched. Following the
+    // thread rather than one run also covers restart continuations and
+    // queued follow-ups. A deleted thread cannot hold the schedule back.
     const readPreviousRun = (id: ScheduledTaskId) =>
-      sql<{ readonly status: string; readonly completed_at: string | null }>`
-        SELECT run.status, run.completed_at
+      sql<{ readonly busy: number | null; readonly finished_at: string | null }>`
+        SELECT
+          MAX(run.status IN ('preparing', 'queued', 'starting', 'running', 'waiting')) AS busy,
+          MAX(run.completed_at) AS finished_at
         FROM scheduled_tasks AS task
-        JOIN orchestration_v2_projection_runs AS run
-          ON run.run_id = task.last_dispatched_run_id
         JOIN orchestration_v2_projection_threads AS thread
-          ON thread.thread_id = run.thread_id
-        WHERE task.task_id = ${id} AND thread.deleted_at IS NULL
+          ON thread.thread_id = COALESCE(task.thread_id, task.last_thread_id)
+          AND thread.deleted_at IS NULL
+        JOIN orchestration_v2_projection_runs AS run ON run.thread_id = thread.thread_id
+        WHERE task.task_id = ${id}
       `.pipe(
-        Effect.map((rows): PreviousRun => {
-          const row = rows[0];
-          if (row === undefined) return { busy: false, finishedAt: null };
-          const finishedAt =
-            row.completed_at === null ? Option.none() : DateTime.make(row.completed_at);
-          return {
-            busy: ACTIVE_RUN_STATUSES.has(row.status),
-            finishedAt: Option.getOrNull(finishedAt),
-          };
-        }),
+        Effect.map(([row]): PreviousRun => ({
+          busy: row?.busy === 1,
+          finishedAt:
+            row?.finished_at == null ? null : Option.getOrNull(DateTime.make(row.finished_at)),
+        })),
         Effect.mapError((cause) =>
           taskError("Could not read the schedule task's previous run.", { taskId: id, cause }),
         ),
@@ -891,52 +878,47 @@ export const layer = Layer.effect(
         const result =
           active.threadId === null
             ? yield* Effect.exit(
-                threadLaunch.launch({
-                  commandId,
-                  projectId: active.projectId,
-                  title: active.title,
-                  modelSelection: active.modelSelection,
-                  runtimeMode: active.runtimeMode,
-                  interactionMode: active.interactionMode,
-                  workspaceStrategy: active.workspaceStrategy,
-                  initialMessage: {
+                threadLaunch
+                  .launch({
+                    commandId,
+                    projectId: active.projectId,
+                    title: active.title,
+                    modelSelection: active.modelSelection,
+                    runtimeMode: active.runtimeMode,
+                    interactionMode: active.interactionMode,
+                    workspaceStrategy: active.workspaceStrategy,
+                    initialMessage: {
+                      messageId,
+                      scheduledTaskId: active.id,
+                      text: prompt,
+                      attachments: [],
+                    },
+                    createdBy: active.createdBy,
+                    creationSource: active.creationSource,
+                  })
+                  .pipe(Effect.map((launched) => launched.threadId)),
+              )
+            : yield* Effect.exit(
+                threadManagement
+                  .sendToThread({
+                    projectId: active.projectId,
+                    commandId,
+                    threadId: ThreadId.make(active.threadId),
                     messageId,
                     scheduledTaskId: active.id,
                     text: prompt,
                     attachments: [],
-                  },
-                  createdBy: active.createdBy,
-                  creationSource: active.creationSource,
-                }),
-              )
-            : yield* Effect.exit(
-                threadManagement.sendToThread({
-                  projectId: active.projectId,
-                  commandId,
-                  threadId: ThreadId.make(active.threadId),
-                  messageId,
-                  scheduledTaskId: active.id,
-                  text: prompt,
-                  attachments: [],
-                  modelSelection: active.modelSelection,
-                  // Scheduled prompts must not interrupt tools in the bound thread.
-                  mode: "queue",
-                  createdBy: active.createdBy,
-                  creationSource: active.creationSource,
-                }),
+                    modelSelection: active.modelSelection,
+                    // Scheduled prompts must not interrupt tools in the bound thread.
+                    mode: "queue",
+                    createdBy: active.createdBy,
+                    creationSource: active.creationSource,
+                  })
+                  .pipe(Effect.as(ThreadId.make(active.threadId))),
               );
 
         const completedAt = yield* localNow;
         const runSucceeded = result._tag === "Success";
-        // The agent keeps working after the dispatch returns; remembering its
-        // run lets the poller hold the next slot until that work finishes.
-        const dispatchedRunId =
-          result._tag !== "Success"
-            ? null
-            : "run" in result.value
-              ? result.value.run.id
-              : (result.value.projection.runs.find((run) => run.userMessageId === messageId)?.id ??
-                null);
         const lastRunStatus = runSucceeded ? ("succeeded" as const) : ("failed" as const);
         const lastRunError = runSucceeded ? null : errorMessage(result.cause);
         // Re-read the task so the next run is computed from the schedule as it
@@ -963,7 +945,9 @@ export const layer = Layer.effect(
             status: lastRunStatus,
             error: lastRunError,
             startedAtIso,
-            dispatchedRunId,
+            // The agent keeps working after the dispatch returns; the poller
+            // holds the next slot while this thread has an active run.
+            threadId: result._tag === "Success" ? result.value : null,
           });
           yield* notifyChanged;
         }
@@ -980,39 +964,15 @@ export const layer = Layer.effect(
       );
     });
 
-    // A due wall-clock run that is long past its slot (server was off or
-    // asleep) is skipped and re-aimed at its next occurrence, not fired late.
-    const rescheduleMissedRun = Effect.fn("ScheduledTaskService.rescheduleMissedRun")(function* (
+    // Moves a due run to its next occurrence instead of firing it. Guarded on
+    // the polled next_run_at so a pause or schedule edit saved since the poll
+    // read the task is not overwritten from the stale snapshot.
+    const skipDueRun = Effect.fn("ScheduledTaskService.skipDueRun")(function* (
       task: ScheduledTask,
       now: DateTime.DateTime,
     ) {
       const next = nextRunAt(task, now);
-      yield* Effect.logInfo("Skipping missed schedule task run", {
-        taskId: task.id,
-        missedRunAt: task.nextRunAt,
-        rescheduledTo: next,
-      });
-      yield* sql`
-        UPDATE scheduled_tasks
-        SET next_run_at = ${next},
-            updated_at = ${iso(now)}
-        WHERE task_id = ${task.id}
-      `.pipe(
-        Effect.mapError((cause) =>
-          taskError("Could not reschedule missed schedule task run.", { taskId: task.id, cause }),
-        ),
-      );
-      yield* notifyChanged;
-    });
-
-    // A due run whose previous run the agent is still working on waits for
-    // it (catch up) or skips to its next time, so runs never stack.
-    const skipBusyRun = Effect.fn("ScheduledTaskService.skipBusyRun")(function* (
-      task: ScheduledTask,
-      now: DateTime.DateTime,
-    ) {
-      const next = nextRunAt(task, now);
-      yield* Effect.logInfo("Skipping schedule task run while its previous run is busy", {
+      yield* Effect.logInfo("Skipping schedule task run", {
         taskId: task.id,
         skippedRunAt: task.nextRunAt,
         rescheduledTo: next,
@@ -1021,10 +981,10 @@ export const layer = Layer.effect(
         UPDATE scheduled_tasks
         SET next_run_at = ${next},
             updated_at = ${iso(now)}
-        WHERE task_id = ${task.id}
+        WHERE task_id = ${task.id} AND next_run_at = ${task.nextRunAt}
       `.pipe(
         Effect.mapError((cause) =>
-          taskError("Could not reschedule busy schedule task run.", { taskId: task.id, cause }),
+          taskError("Could not reschedule schedule task run.", { taskId: task.id, cause }),
         ),
       );
       yield* notifyChanged;
@@ -1042,9 +1002,7 @@ export const layer = Layer.effect(
         case "wait":
           return;
         case "skip":
-          return yield* skipBusyRun(task, now);
-        case "missed":
-          return yield* rescheduleMissedRun(task, now);
+          return yield* skipDueRun(task, now);
         case "run":
           return yield* runTask(task, "scheduled").pipe(Effect.asVoid);
       }

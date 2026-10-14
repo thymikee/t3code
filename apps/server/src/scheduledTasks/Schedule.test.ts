@@ -86,7 +86,7 @@ describe("scheduled task schedule calculation", () => {
       ).toBe("run");
     });
 
-    it("moves a wall-clock run missed while the server was away to its next time", () => {
+    it("skips a wall-clock run missed while the server was away", () => {
       for (const schedule of [cron, { type: "fixed_time", timeOfDay: "09:00" } as const]) {
         expect(
           dueRunAction({
@@ -96,7 +96,7 @@ describe("scheduled task schedule calculation", () => {
             now: at("15:00"),
             previousRun: { busy: false, finishedAt: at("08:40") },
           }),
-        ).toBe("missed");
+        ).toBe("skip");
       }
       // An interval catches up with a single late run instead.
       expect(
@@ -143,7 +143,7 @@ describe("scheduled task schedule calculation", () => {
           now: at("14:00"),
           previousRun: { busy: false, finishedAt: at("10:16") },
         }),
-      ).toBe("missed");
+      ).toBe("skip");
     });
   });
 
