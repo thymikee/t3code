@@ -136,6 +136,36 @@ describe("V2 assistant streaming", () => {
       expect(filter(tool, 2)).toBe(tool);
     },
   );
+
+  it("stores a running node once until it changes", () => {
+    const filter = makeAssistantStreamingFilter("paragraph");
+    const running: Extract<ProviderAdapter.ProviderAdapterV2Event, { type: "node.updated" }> = {
+      type: "node.updated",
+      driver: ProviderDriverKind.make("opencode"),
+      node: {
+        id: NodeId.make("reasoning"),
+        threadId: ThreadId.make("thread"),
+        runId: null,
+        parentNodeId: null,
+        rootNodeId: NodeId.make("root"),
+        kind: "reasoning",
+        status: "running",
+        countsForRun: false,
+        providerThreadId: null,
+        providerTurnId: null,
+        nativeItemRef: null,
+        runtimeRequestId: null,
+        checkpointScopeId: null,
+        startedAt: null,
+        completedAt: null,
+      },
+    };
+    expect(filter(running, 0)).toBe(running);
+    expect(filter({ ...running, node: { ...running.node } }, 1)).toBeNull();
+    const completed = { ...running, node: { ...running.node, status: "completed" as const } };
+    expect(filter(completed, 2)).toBe(completed);
+    expect(filter(running, 3)).toBe(running);
+  });
 });
 
 it("holds a streamed section heading until its content has a boundary", () => {

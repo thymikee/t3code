@@ -88,19 +88,26 @@ export function splitBufferedAssistantText(text: string): { ready: string; rest:
   return { ready: text.slice(0, boundary), rest: text.slice(boundary) };
 }
 
-/** Buffer assistant messages and reasoning alike, keeping unfinished markdown out of the read model. */
+/**
+ * Buffer assistant messages and reasoning alike, keeping unfinished markdown out of the read model.
+ * Also drops node updates identical to the last one delivered: adapters re-emit a streaming
+ * block's node with every text delta, and each stored copy is a permanent event row.
+ */
 export function makeAssistantStreamingFilter(mode: ResponseStreamingMode) {
   const delivered = new Map<string, { text: string; at: number }>();
+  const runningNodes = new Map<string, string>();
   return (
     event: ProviderAdapter.ProviderAdapterV2Event,
     now: number,
   ): ProviderAdapter.ProviderAdapterV2Event | null => {
-    if (
-      event.type === "node.updated" &&
-      event.node.kind === "assistant_message" &&
-      event.node.status === "running"
-    )
-      return null;
+    if (event.type === "node.updated") {
+      if (event.node.kind === "assistant_message" && event.node.status === "running") return null;
+      const serialized = JSON.stringify(event.node);
+      if (runningNodes.get(event.node.id) === serialized) return null;
+      if (event.node.status === "running") runningNodes.set(event.node.id, serialized);
+      else runningNodes.delete(event.node.id);
+      return event;
+    }
     const message =
       event.type === "message.updated" && event.message.role === "assistant"
         ? event.message
